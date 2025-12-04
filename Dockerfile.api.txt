@@ -1,0 +1,21 @@
+# Imagem base estável baseada em Debian (slim) para garantir compatibilidade com drivers SQL
+FROM node:20-slim
+
+# Diretório de trabalho no container
+WORKDIR /app
+
+# Inicializa um projeto node vazio para instalar dependências
+RUN npm init -y
+
+# Instala as dependências do Backend diretamente
+# Isso evita depender do package.json do frontend e erros de versão
+RUN npm install express mssql cors @google/genai --save
+
+# Copia o código do servidor
+COPY api_server.js .
+
+# Expõe a porta da API
+EXPOSE 8080
+
+# Comando de inicialização
+CMD ["node", "api_server.js"]

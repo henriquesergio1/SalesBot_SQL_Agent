@@ -1,18 +1,16 @@
 # Estágio 1: Build da Aplicação React
-# Usando a imagem completa (bullseye) para garantir que temos Python/Make/GCC para o build do Vite
-FROM node:18 as build
+FROM node:20-alpine as build
 
 WORKDIR /app
 
-# Copia arquivos de configuração
-COPY package*.json ./
+# Copia apenas o package.json (Ignora package-lock.json para evitar conflitos de OS)
+COPY package.json ./
 
-# Instala dependências
-# --legacy-peer-deps: Evita conflitos de versões
-# --no-audit: Acelera a instalação ignorando auditoria de segurança
-RUN npm install --legacy-peer-deps --no-audit
+# Instala dependências sem ler o lockfile (--no-package-lock) e sem auditoria
+# Isso força o download dos binários corretos para Linux (Alpine)
+RUN npm install --legacy-peer-deps --no-audit --no-package-lock
 
-# Copia todo o código fonte
+# Copia o restante do código fonte
 COPY . .
 
 # Gera o build de produção

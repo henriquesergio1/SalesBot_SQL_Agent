@@ -1,4 +1,3 @@
-
 version: '3.8'
 
 services:
@@ -22,21 +21,20 @@ services:
 
   # 2. SQL API Connector (Node.js + SQL Server + AI Agent Backend)
   salesbot-api:
-    image: node:18
+    build:
+      context: .
+      dockerfile: Dockerfile.api.txt
     container_name: salesbot-api
-    working_dir: /app
-    # Instala dependências e roda o servidor. Usando imagem full para evitar erros de compilação.
-    command: sh -c "npm install express mssql cors @google/genai --legacy-peer-deps --no-audit && node api_server.js" 
+    restart: always
     ports:
       - "8080:8080"
     environment:
       - DB_HOST=sql-server
       - DB_USER=sa
       - DB_PASS=YourStrongPass123!
+      - DB_NAME=flexx10071188
       - API_KEY=${API_KEY}
       - SECRET_KEY=minha-senha-secreta-api
-    volumes:
-      - ./api_server.js:/app/api_server.js
     depends_on:
       - sql-server
 

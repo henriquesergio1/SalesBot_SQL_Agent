@@ -1,36 +1,27 @@
 # Estágio 1: Build da Aplicação React
-# Usando imagem Full (Debian) ao invés de Alpine para garantir compatibilidade com bibliotecas de build
-FROM node:20 as build
+# Usando Debian Bullseye (node:18) para estabilidade máxima de build
+FROM node:18-bullseye as build
 
 WORKDIR /app
 
-# Copia apenas o package.json
+# Configurações para evitar erros de rede/SSL no NPM
+RUN npm config set strict-ssl false
+RUN npm config set registry https://registry.npmjs.org/
+
 COPY package.json ./
 
-# Instala dependências ignorando lockfile para evitar conflitos de plataforma (Windows -> Linux)
-# --legacy-peer-deps ajuda a resolver conflitos de versão do React
-RUN npm install --legacy-peer-deps --no-audit --no-package-lock
+# Instala dependências de forma limpa
+# O flag --legacy-peer-deps é mantido por segurança com versões de React/Vite
+RUN npm install --legacy-peer-deps --no-audit
 
-# Copia o restante do código fonte
 COPY . .
 
-# Gera o build de produção
 RUN npm run build
 
-# Estágio 2: Servidor Web Nginx
+# Estágio 2: Nginx
 FROM nginx:alpine
-
-# Remove configurações padrão do Nginx
 RUN rm -rf /etc/nginx/conf.d/*
-
-# Copia o build gerado no estágio anterior
 COPY --from=build /app/dist /usr/share/nginx/html
-
-# Copia a configuração customizada do Nginx
 COPY nginx.conf.txt /etc/nginx/conf.d/default.conf
-
-# Expõe a porta 80
 EXPOSE 80
-
-# Inicia o Nginx
 CMD ["nginx", "-g", "daemon off;"]

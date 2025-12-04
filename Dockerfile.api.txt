@@ -1,21 +1,15 @@
-# Usando imagem Node.js completa (Debian) para garantir que drivers nativos do SQL Server (msnodesqlv8/tedious) compilem corretamente
-FROM node:20
+FROM node:18-bullseye
 
-# Diretório de trabalho no container
 WORKDIR /app
 
-# Inicializa um projeto node vazio para instalar dependências
 RUN npm init -y
+RUN npm config set strict-ssl false
 
-# Instala as dependências do Backend diretamente
-# Inclui express, mssql (driver SQL), cors e a biblioteca de IA
+# Instala drivers SQL e IA no backend (onde devem ficar)
 RUN npm install express mssql cors @google/genai --save
 
-# Copia o código do servidor
 COPY api_server.js .
 
-# Expõe a porta da API
 EXPOSE 8080
 
-# Comando de inicialização
 CMD ["node", "api_server.js"]

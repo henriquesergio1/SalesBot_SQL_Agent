@@ -1,5 +1,5 @@
-# Imagem base estável baseada em Debian (slim) para garantir compatibilidade com drivers SQL
-FROM node:20-slim
+# Usando imagem Node.js completa (Debian) para garantir que drivers nativos do SQL Server (msnodesqlv8/tedious) compilem corretamente
+FROM node:20
 
 # Diretório de trabalho no container
 WORKDIR /app
@@ -8,7 +8,7 @@ WORKDIR /app
 RUN npm init -y
 
 # Instala as dependências do Backend diretamente
-# Isso evita depender do package.json do frontend e erros de versão
+# Inclui express, mssql (driver SQL), cors e a biblioteca de IA
 RUN npm install express mssql cors @google/genai --save
 
 # Copia o código do servidor

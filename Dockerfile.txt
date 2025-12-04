@@ -1,13 +1,14 @@
 # Estágio 1: Build da Aplicação React
-FROM node:20-alpine as build
+# Usando imagem Full (Debian) ao invés de Alpine para garantir compatibilidade com bibliotecas de build
+FROM node:20 as build
 
 WORKDIR /app
 
-# Copia apenas o package.json (Ignora package-lock.json para evitar conflitos de OS)
+# Copia apenas o package.json
 COPY package.json ./
 
-# Instala dependências sem ler o lockfile (--no-package-lock) e sem auditoria
-# Isso força o download dos binários corretos para Linux (Alpine)
+# Instala dependências ignorando lockfile para evitar conflitos de plataforma (Windows -> Linux)
+# --legacy-peer-deps ajuda a resolver conflitos de versão do React
 RUN npm install --legacy-peer-deps --no-audit --no-package-lock
 
 # Copia o restante do código fonte

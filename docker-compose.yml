@@ -15,7 +15,7 @@ services:
       - VITE_API_URL=http://localhost:8085/api/v1/query
       - VITE_GATEWAY_URL=http://localhost:8082
       - VITE_USE_MOCK=false
-      - API_KEY=${API_KEY} 
+      # API_KEY Removida por segurança (backend que gerencia)
     depends_on:
       - salesbot-api
       - whatsapp-gateway

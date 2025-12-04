@@ -17,17 +17,9 @@ function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [currentData, setCurrentData] = useState<SalesSummary | null>(null);
-  const [apiKeyMissing, setApiKeyMissing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Check API Key on mount
-  useEffect(() => {
-    if (!process.env.API_KEY) {
-      setApiKeyMissing(true);
-    }
-  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -83,20 +75,6 @@ function App() {
       handleSend();
     }
   };
-
-  if (apiKeyMissing) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="bg-white p-8 rounded-lg shadow-lg max-w-md text-center">
-          <i className="fas fa-exclamation-triangle text-red-500 text-4xl mb-4"></i>
-          <h2 className="text-xl font-bold mb-2">API Key Missing</h2>
-          <p className="text-gray-600 mb-4">
-             Por favor, configure sua chave de API Gemini no ambiente de execução.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-screen bg-gray-200">

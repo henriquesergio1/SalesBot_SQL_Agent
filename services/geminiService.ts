@@ -1,14 +1,20 @@
+
 import { SalesSummary } from "../types";
 
-// Função para pegar URL da API (suporta Vite env ou padrão localhost)
+// Função para pegar URL da API
 const getApiUrl = () => {
+  // 1. Tenta pegar do LocalStorage (definido na UI pelo usuário)
+  const storedUrl = localStorage.getItem('salesbot_api_url');
+  if (storedUrl) return storedUrl;
+
+  // 2. Tenta pegar do Vite Env
   // @ts-ignore
   const envUrl = import.meta.env?.VITE_API_URL;
   if (envUrl) {
-    // Se a URL termina com /query, remove para pegar a base
     return envUrl.replace('/query', '/chat');
   }
-  // Atualizado fallback para 8085
+
+  // 3. Fallback Padrão
   return "http://localhost:8085/api/v1/chat";
 };
 
@@ -28,7 +34,7 @@ export const sendMessageToAgent = async (
       },
       body: JSON.stringify({
         message,
-        history // Opcional: O backend pode ou não usar o histórico dependendo da implementação
+        history 
       })
     });
 
@@ -39,13 +45,13 @@ export const sendMessageToAgent = async (
     const result = await response.json();
     return {
       text: result.text,
-      data: result.data // O backend deve retornar { text: "...", data: {...} }
+      data: result.data
     };
 
   } catch (error: any) {
     console.error("Erro ao comunicar com Backend:", error);
     return { 
-      text: `Erro de conexão com o servidor Docker: ${error.message}. Verifique se o container 'salesbot-api' está rodando na porta 8085.` 
+      text: `Erro de conexão com o servidor Docker (${API_URL}): ${error.message}. \n\nDICA: Abra as configurações (ícone de engrenagem) e verifique se o Endereço da API está correto (use o IP do servidor se não estiver no mesmo PC).` 
     };
   }
 };

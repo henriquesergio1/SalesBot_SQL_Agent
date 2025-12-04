@@ -313,16 +313,37 @@ app.post('/api/v1/query', async (req, res) => {
     }
 });
 
-// ROTA 3: Webhook WhatsApp
+// ROTA 3: Webhook WhatsApp (EVOLUTION API FORMAT)
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    const message = req.body;
-    const userText = message.body || message.content || message.message;
-    const sender = message.from;
+    // Evolution API sends data in a specific structure
+    const data = req.body;
     
-    if (!userText || !sender || sender.includes('@g.us')) return res.json({ status: 'ignored' });
+    // Check if it's a message event
+    if (data.type !== 'message' && !data.data?.message) {
+        return res.json({ status: 'ignored' });
+    }
 
-    console.log(`[WhatsApp] ${sender}: ${userText}`);
+    // Extract message content safely
+    const messageData = data.data;
+    const sender = messageData?.key?.remoteJid;
+    const pushName = messageData?.pushName;
+    
+    // Extract text from various possible locations in Evolution payload
+    const userText = 
+        messageData?.message?.conversation || 
+        messageData?.message?.extendedTextMessage?.text || 
+        null;
+
+    if (!userText || !sender || sender.includes('@g.us')) {
+        // Ignore groups or empty messages
+        return res.json({ status: 'ignored' });
+    }
+
+    console.log(`[WhatsApp Evolution] ${pushName} (${sender}): ${userText}`);
+    
+    // Process async to avoid timeout
     processWhatsappResponse(sender, userText);
+    
     res.json({ status: 'processing' });
 });
 
@@ -362,15 +383,37 @@ async function processWhatsappResponse(sender, userText) {
 }
 
 async function sendWhatsappMessage(to, text) {
-    const gatewayUrl = 'http://whatsapp-gateway:21465'; 
-    const session = 'vendas_bot'; 
+    const gatewayUrl = 'http://whatsapp-gateway:8080'; // Internal Docker URL for Evolution
+    const session = 'vendas_bot'; // Default instance name
     const secret = process.env.SECRET_KEY || 'minha-senha-secreta-api';
+    
     try {
-        await fetch(`${gatewayUrl}/api/${session}/send-message`, {
+        // Clean the number format for Evolution (it expects numbers only usually, but remoteJid is safe)
+        // Evolution v1 endpoint: /message/sendText/{instance}
+        const number = to.replace('@s.whatsapp.net', '').replace('@c.us', '');
+
+        const payload = {
+            number: number,
+            options: {
+                delay: 1000,
+                presence: "composing"
+            },
+            textMessage: {
+                text: text
+            }
+        };
+
+        const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret}` },
-            body: JSON.stringify({ phone: to.replace('@c.us', ''), message: text, isGroup: false })
+            headers: { 
+                'Content-Type': 'application/json', 
+                'apikey': secret 
+            },
+            body: JSON.stringify(payload)
         });
+
+        const respData = await response.json();
+        console.log("[Gateway] Send result:", respData);
     } catch (err) {
         console.error("Gateway Offline?", err.message);
     }

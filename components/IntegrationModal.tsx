@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 
 interface IntegrationModalProps {
@@ -42,53 +43,67 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
 
     try {
-      // Tenta conectar com o endpoint padrão do WPPConnect Server
-      // POST /api/:session/start-session
-      const endpoint = `${gatewayUrl}/api/${sessionName}/start-session`;
-      
-      console.log(`Tentando conectar ao Gateway: ${endpoint}`);
+      console.log(`Tentando conectar ao Gateway Evolution: ${gatewayUrl}`);
 
-      // NOTA: Em produção, isso pode dar erro de CORS se o container não permitir headers.
-      // O WPPConnect geralmente precisa de configuração de CORS ou proxy reverso.
-      const response = await fetch(endpoint, {
+      // 1. Tenta criar a Instância (Evolution Pattern)
+      // Endpoint: POST /instance/create
+      const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${secretKey}`
+          'apikey': secretKey
         },
         body: JSON.stringify({
-          webhook: null,
-          waitQrCode: true // Pede para retornar o QR Code na resposta
+          instanceName: sessionName,
+          qrcode: true
         })
       });
 
-      if (!response.ok) {
-        throw new Error(`Erro ${response.status}: Verifique a URL e a Secret Key.`);
+      // Se der erro 403, pode ser que a instância já exista. Tentamos conectar direto.
+      if (!createResponse.ok && createResponse.status !== 403) {
+         // Tenta ver se é erro de "Instance already exists"
+         const errData = await createResponse.json();
+         if (!JSON.stringify(errData).includes('already exists')) {
+             throw new Error(`Erro ao criar instância: ${createResponse.status}`);
+         }
       }
 
-      const data = await response.json();
+      // 2. Busca o QR Code (Connect)
+      // Endpoint: GET /instance/connect/{instance}
+      const connectResponse = await fetch(`${gatewayUrl}/instance/connect/${sessionName}`, {
+        method: 'GET',
+        headers: {
+            'apikey': secretKey
+        }
+      });
 
-      if (data.qrcode) {
-        // O WPPConnect retorna o QR code como string base64 data:image/png...
-        setQrCodeData(data.qrcode);
-      } else if (data.status === 'CONNECTED') {
-        setErrorMsg("Esta sessão já está conectada!");
+      if (!connectResponse.ok) {
+         throw new Error("Falha ao buscar QR Code. Verifique se o container Evolution está rodando.");
+      }
+
+      const data = await connectResponse.json();
+
+      // Evolution API retorna: { base64: "..." } ou { qrcode: "..." } dependendo da versão
+      // Na v1.8.x normalmente é 'base64'
+      const qrCode = data.base64 || data.qrcode;
+
+      if (qrCode) {
+        setQrCodeData(qrCode);
+      } else if (data.instance?.status === 'open') {
+        setErrorMsg("Esta sessão já está conectada no WhatsApp!");
         setIsConnected(true);
       } else {
-        // Fallback: Se a API não retornou QR Code imediato, iniciamos um polling ou mostramos aviso
-        // Para simplificar a demo, vamos assumir que pode falhar se não estiver rodando
-        throw new Error("O Gateway não retornou um QR Code. Verifique os logs do container.");
+        throw new Error("QR Code não retornado. Tente novamente em alguns segundos.");
       }
 
     } catch (err: any) {
       console.error(err);
-      // Se falhar (ex: container desligado), usamos um mock para não travar a UI do usuário na demonstração
-      setErrorMsg(`Falha na conexão real: ${err.message}. (Modo Demo Ativado)`);
+      setErrorMsg(`Falha na conexão: ${err.message}.`);
       
-      // MOCK DE FALLBACK PARA DEMONSTRAÇÃO
-      setTimeout(() => {
-        setQrCodeData("mock-qr-code");
-      }, 1000);
+      // Fallback Demo apenas para não travar UI se o usuário não tiver docker rodando agora
+      if (err.message.includes('Failed to fetch')) {
+          setErrorMsg("Não foi possível conectar ao localhost:8081. Certifique-se que o Docker está rodando.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -168,7 +183,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           }`}
           onClick={() => setConnectionType('gateway')}
         >
-          WhatsApp Normal (Gateway)
+          WhatsApp Normal (Evolution API)
         </button>
         <button
           className={`flex-1 py-2 text-xs font-bold rounded-md transition ${
@@ -185,9 +200,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg flex items-start gap-3">
              <i className="fas fa-plug mt-1 text-yellow-600"></i>
              <div>
-               <h4 className="text-sm font-bold text-yellow-800">Uso com Docker Gateway</h4>
+               <h4 className="text-sm font-bold text-yellow-800">Uso com Evolution API (Docker)</h4>
                <p className="text-xs text-yellow-700 mt-1">
-                 Os dados abaixo devem bater com o serviço <code>whatsapp-gateway</code> no seu <code>docker-compose.yml</code>.
+                 Configure a conexão com o container Evolution API rodando na porta 8081.
                </p>
              </div>
           </div>
@@ -202,21 +217,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                  placeholder="http://localhost:8081"
                  className="w-full border rounded p-2 text-sm font-mono text-gray-700 focus:border-whatsapp-dark outline-none" 
                />
-               <p className="text-[10px] text-gray-400 mt-1">Porta 8081 mapeada no docker-compose (externa).</p>
              </div>
              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Session ID (Nome)</label>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
                   <input 
                     type="text" 
                     value={sessionName}
                     onChange={(e) => setSessionName(e.target.value)}
-                    placeholder="ex: vendas"
+                    placeholder="vendas_bot"
                     className="w-full border rounded p-2 text-sm font-mono text-gray-700 focus:border-whatsapp-dark outline-none" 
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Secret Key</label>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">API Key (Auth)</label>
                   <input 
                     type="password" 
                     value={secretKey}
@@ -246,28 +260,16 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                      className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition shadow-lg flex items-center gap-2"
                    >
                      {isLoading && <i className="fas fa-circle-notch animate-spin"></i>}
-                     {isLoading ? 'Conectando ao Container...' : 'Gerar QR Code'}
+                     {isLoading ? 'Conectando...' : 'Criar Instância & Gerar QR'}
                    </button>
                 </div>
              ) : (
                 <div className="text-center animate-fade-in">
                    <div className="bg-white p-2 shadow-lg rounded-lg mb-4 inline-block">
-                      {/* Se for mock, mostra div, se for real, mostra imagem */}
-                      {qrCodeData === 'mock-qr-code' ? (
-                          <div className="w-48 h-48 bg-slate-900 grid grid-cols-6 grid-rows-6 gap-1 p-2 cursor-pointer" title="Scan QR Code Demo">
-                              <div className="col-span-2 row-span-2 bg-white rounded-sm"></div>
-                              <div className="col-span-2 row-span-2 col-start-5 bg-white rounded-sm"></div>
-                              <div className="col-span-2 row-span-2 row-start-5 bg-white rounded-sm"></div>
-                              <div className="col-start-3 row-start-2 bg-white rounded-full"></div>
-                              <div className="col-start-4 row-start-4 bg-white rounded-full"></div>
-                              <div className="col-start-2 row-start-5 bg-white rounded-full"></div>
-                          </div>
-                      ) : (
-                          <img src={qrCodeData} alt="QR Code WhatsApp" className="w-64 h-64" />
-                      )}
+                      <img src={qrCodeData} alt="QR Code WhatsApp" className="w-64 h-64" />
                    </div>
                    <p className="text-sm font-bold text-gray-700">Abra o WhatsApp e Escaneie</p>
-                   <p className="text-xs text-gray-500 mt-1">Conectando à sessão: <strong>{sessionName}</strong></p>
+                   <p className="text-xs text-gray-500 mt-1">Instância: <strong>{sessionName}</strong></p>
                    <button onClick={() => setQrCodeData(null)} className="mt-4 text-xs text-red-500 hover:underline">Cancelar / Tentar Novamente</button>
                 </div>
              )}

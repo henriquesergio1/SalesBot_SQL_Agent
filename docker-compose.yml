@@ -38,20 +38,26 @@ services:
     depends_on:
       - sql-server
 
-  # 3. WhatsApp Gateway (WPPConnect)
+  # 3. WhatsApp Gateway (Evolution API)
   whatsapp-gateway:
-    # Usando imagem do Docker Hub (Pública) para evitar erro de 'denied' no ghcr.io
-    image: wppconnect/wppconnect-server:latest
+    image: atendai/evolution-api:v1.8.2
     container_name: whatsapp-gateway
     restart: always
     ports:
-      - "8081:21465" 
+      - "8081:8080"
     environment:
-      - SECRET_KEY=minha-senha-secreta-api
-      - PORT=21465
-      - WEBHOOK_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
+      - AUTHENTICATION_API_KEY=minha-senha-secreta-api
+      - SERVER_PORT=8080
+      - SERVER_URL=http://localhost:8081
+      - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
+      - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
+      - WEBHOOK_EVENTS_QRCODE_UPDATED=true
+      - WEBHOOK_EVENTS_MESSAGES_SET=true
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
     volumes:
-      - whatsapp_sessions:/usr/src/app/tokens
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
 
   # 4. SQL Server (Banco de Dados Local)
   sql-server:
@@ -68,4 +74,5 @@ services:
 
 volumes:
   sql_data:
-  whatsapp_sessions:
+  evolution_instances:
+  evolution_store:

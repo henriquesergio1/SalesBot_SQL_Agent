@@ -31,29 +31,29 @@ const aiClient = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 const getSystemInstruction = () => {
     const today = new Date().toISOString().split('T')[0];
     return `
-Você é o "SalesBot", um gerente comercial inteligente com acesso direto ao banco de dados SQL.
+Você é o "SalesBot", um auditor de dados comerciais conectado ao SQL Server.
 HOJE É: ${today}.
 
-SUAS FERRAMENTAS (Use na ordem que precisar):
-1. **get_sales_team**: Use para descobrir IDs e nomes de Vendedores ou Supervisores.
-   - Ex: "Quem é o vendedor Carlos?" -> Use esta tool para pegar o ID dele.
-   - Ex: "Quem são os supervisores?" -> Use esta tool.
+DIRETRIZES DE SEGURANÇA E VERACIDADE (CRÍTICO):
+1. **ZERO ALUCINAÇÃO**: NUNCA invente, adivinhe ou deduza nomes de vendedores ou clientes. 
+2. **BUSCA EXATA**: Se o usuário perguntar "Quem é o ID 106?", você OBRIGATORIAMENTE deve usar a tool 'get_sales_team' passando o argumento 'id: 106'.
+3. **RESPOSTA NEGATIVA**: Se a tool retornar uma lista vazia, responda: "Não encontrei nenhum registro com o ID informado". NÃO tente chutar um nome próximo.
+4. **HIERARQUIA**: A verdade absoluta está no retorno das ferramentas. Se a ferramenta diz que o ID 106 é "Maria", então é "Maria".
 
-2. **get_customer_base**: Use para buscar informações cadastrais de clientes (Cidade, Rede, Canal).
-   - Ex: "Onde fica o cliente Mercado X?" -> Use esta tool.
-   - Ex: "Clientes da cidade Y" -> Use esta tool.
+SUAS FERRAMENTAS:
+1. **get_sales_team**: Use para descobrir identidade de funcionários.
+   - Parâmetros: 'id' (para busca exata de código) ou 'searchName' (para busca de texto).
+   - Ex: "Quem é o 106?" -> Chame get_sales_team({ id: 106 }).
+   - Ex: "Quem é o Carlos?" -> Chame get_sales_team({ searchName: "Carlos" }).
 
-3. **query_sales_data**: Use para buscar VENDAS, VALORES e PEDIDOS (A query pesada).
-   - Use esta tool DEPOIS de saber os nomes ou IDs corretos (se precisar).
-   - Se o usuário pedir "Vendas do Carlos", você pode pesquisar direto pelo nome "Carlos" aqui, ou ser mais preciso buscando o ID dele primeiro na tool 1.
+2. **get_customer_base**: Use para buscar informações cadastrais de clientes.
+   
+3. **query_sales_data**: Use APENAS para buscar VENDAS e VALORES.
+   - Não use esta tool para descobrir "Quem é o vendedor X". Use a tool 1 para isso.
 
 REGRAS DE DATA:
 - Se o usuário disser "últimos X dias", calcule as datas com base em ${today}.
 - Se não houver data, assuma os últimos 30 dias na query de vendas.
-
-RESPOSTAS:
-- Seja analítico. Se tiver dados, mostre totais.
-- A moeda é R$ (BRL).
 `;
 };
 
@@ -61,15 +61,16 @@ RESPOSTAS:
 // 2. DEFINIÇÃO DAS FERRAMENTAS (TOOLS)
 // ==================================================================================
 
-// Tool 1: Equipe de Vendas
+// Tool 1: Equipe de Vendas (Atualizada com ID)
 const salesTeamTool = {
     name: "get_sales_team",
-    description: "Lista a equipe de vendas (Vendedores e Supervisores) com seus IDs e hierarquia.",
+    description: "Consulta a tabela de funcionários para identificar Vendedores, Supervisores ou Motoristas pelo ID ou Nome.",
     parameters: {
         type: "OBJECT",
         properties: {
-            searchName: { type: "STRING", description: "Nome parcial para filtrar (opcional)" },
-            role: { type: "STRING", description: "Filtrar por cargo: 'VENDEDOR' ou 'SUPERVISOR'" }
+            id: { type: "INTEGER", description: "Código exato do funcionário (Ex: 106)" },
+            searchName: { type: "STRING", description: "Nome parcial para filtrar" },
+            role: { type: "STRING", description: "Filtrar por cargo" }
         }
     }
 };
@@ -116,18 +117,23 @@ const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySa
 // ==================================================================================
 
 const SQL_QUERIES = {
-    // 1. Equipe
+    // 1. Equipe (LEFT JOIN para garantir que traga todos, mesmo sem supervisor)
     SALES_TEAM: `
         SELECT DISTINCT 
             V.CODMTCEPG as 'id',
             V.nomepg as 'nome',
-            'VENDEDOR' as 'cargo',
-            S.nomepg as 'supervisor_nome',
+            CASE 
+                WHEN V.TPOEPG = 'V' THEN 'VENDEDOR'
+                WHEN V.TPOEPG = 'S' THEN 'SUPERVISOR'
+                WHEN V.TPOEPG = 'M' THEN 'MOTORISTA'
+                ELSE V.TPOEPG 
+            END as 'cargo',
+            ISNULL(S.nomepg, 'SEM SUPERVISOR') as 'supervisor_nome',
             S.CODMTCEPG as 'supervisor_id'
         FROM flexx10071188.dbo.ibetcplepg V
-        INNER JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn
-        INNER JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
-        WHERE V.TPOEPG = 'V'
+        LEFT JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn
+        LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
+        WHERE V.TPOEPG IN ('V', 'S', 'M')
     `,
 
     // 2. Clientes
@@ -216,16 +222,24 @@ async function executeToolCall(name, args) {
         const result = await request.query(SQL_QUERIES.SALES_TEAM);
         let team = result.recordset;
         
-        if (args.searchName) {
+        // Filtro por ID exato (Prioridade Máxima)
+        if (args.id) {
+            team = team.filter(t => t.id == args.id);
+        }
+        // Filtro por Nome
+        else if (args.searchName) {
             const term = args.searchName.toLowerCase();
             team = team.filter(t => 
                 t.nome.toLowerCase().includes(term) || 
-                t.supervisor_nome?.toLowerCase().includes(term)
+                (t.supervisor_nome && t.supervisor_nome.toLowerCase().includes(term))
             );
         }
+        
         if (args.role) {
             team = team.filter(t => t.cargo.toUpperCase() === args.role.toUpperCase());
         }
+        
+        if (team.length === 0) return { message: "Nenhum funcionário encontrado com esses critérios. Verifique o ID." };
         return team;
     }
 

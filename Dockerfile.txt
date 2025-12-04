@@ -1,14 +1,16 @@
 # Estágio 1: Build da Aplicação React
-FROM node:18-slim as build
+# Usando a imagem completa (bullseye) para garantir que temos Python/Make/GCC para o build do Vite
+FROM node:18 as build
 
 WORKDIR /app
 
 # Copia arquivos de configuração
 COPY package*.json ./
 
-# Instala dependências com flags para evitar erros de compatibilidade e peer deps
-# O --loglevel verbose ajuda a ver o erro real se falhar novamente
-RUN npm install --legacy-peer-deps --loglevel verbose
+# Instala dependências
+# --legacy-peer-deps: Evita conflitos de versões
+# --no-audit: Acelera a instalação ignorando auditoria de segurança
+RUN npm install --legacy-peer-deps --no-audit
 
 # Copia todo o código fonte
 COPY . .

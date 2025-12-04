@@ -22,11 +22,11 @@ services:
 
   # 2. SQL API Connector (Node.js + SQL Server + AI Agent Backend)
   salesbot-api:
-    image: node:18-slim
+    image: node:18
     container_name: salesbot-api
     working_dir: /app
-    # Instala dependências e roda o servidor. Usando slim para evitar falta de libs.
-    command: sh -c "npm install express mssql cors @google/genai --legacy-peer-deps && node api_server.js" 
+    # Instala dependências e roda o servidor. Usando imagem full para evitar erros de compilação.
+    command: sh -c "npm install express mssql cors @google/genai --legacy-peer-deps --no-audit && node api_server.js" 
     ports:
       - "8080:8080"
     environment:

@@ -22,11 +22,11 @@ services:
 
   # 2. SQL API Connector (Node.js + SQL Server + AI Agent Backend)
   salesbot-api:
-    image: node:18-alpine 
+    image: node:18-slim
     container_name: salesbot-api
     working_dir: /app
-    # Instala dependências do servidor (Express, SQL, Google GenAI)
-    command: sh -c "npm install express mssql cors @google/genai && node api_server.js" 
+    # Instala dependências e roda o servidor. Usando slim para evitar falta de libs.
+    command: sh -c "npm install express mssql cors @google/genai --legacy-peer-deps && node api_server.js" 
     ports:
       - "8080:8080"
     environment:
@@ -34,6 +34,7 @@ services:
       - DB_USER=sa
       - DB_PASS=YourStrongPass123!
       - API_KEY=${API_KEY}
+      - SECRET_KEY=minha-senha-secreta-api
     volumes:
       - ./api_server.js:/app/api_server.js
     depends_on:
@@ -50,6 +51,7 @@ services:
       - SECRET_KEY=minha-senha-secreta-api
       - PORT=21465
       # Define o Webhook para onde o WPPConnect enviará as mensagens recebidas
+      # Nota: Usamos o nome do container 'salesbot-api' na rede interna do Docker
       - WEBHOOK_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
     volumes:
       - whatsapp_sessions:/usr/src/app/tokens

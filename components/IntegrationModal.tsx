@@ -20,7 +20,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   // Infra states
   const [sqlHost, setSqlHost] = useState('192.168.1.100');
   const [sqlDb, setSqlDb] = useState('FRETE360_PROD');
-  const [dockerPort, setDockerPort] = useState('8080');
+  const [dockerPort, setDockerPort] = useState('8085'); // Atualizado para 8085
 
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState('http://localhost:8082');

@@ -16,7 +16,8 @@ const getEnvVar = (key: string) => {
   return undefined;
 };
 
-const DOCKER_API_URL = getEnvVar('VITE_API_URL') || "http://localhost:8080/api/v1/query";
+// Alterado default para 8085
+const DOCKER_API_URL = getEnvVar('VITE_API_URL') || "http://localhost:8085/api/v1/query";
 const rawUseMock = getEnvVar('VITE_USE_MOCK');
 
 // Lógica corrigida: Se for string "false", é false. Se for undefined ou true, é true.
@@ -43,7 +44,7 @@ export const querySalesData = async (params: FilterParams): Promise<SalesSummary
       return await response.json();
     } catch (error) {
       console.error("[DockerClient] Erro de Conexão com API:", error);
-      alert("Erro ao conectar com a API Docker. Verifique se o container 'salesbot-api' está rodando.");
+      alert("Erro ao conectar com a API Docker. Verifique se o container 'salesbot-api' está rodando na porta 8085.");
       throw error;
     }
   }

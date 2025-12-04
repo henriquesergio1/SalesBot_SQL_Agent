@@ -11,7 +11,8 @@ services:
     ports:
       - "3000:80"
     environment:
-      - VITE_API_URL=http://localhost:8080/api/v1/query
+      # Atualizado para porta 8085 (externa)
+      - VITE_API_URL=http://localhost:8085/api/v1/query
       - VITE_GATEWAY_URL=http://localhost:8082
       - VITE_USE_MOCK=false
       - API_KEY=${API_KEY} 
@@ -27,7 +28,8 @@ services:
     container_name: salesbot-api
     restart: always
     ports:
-      - "8080:8080"
+      # Porta Externa 8085 mapeada para Interna 8080 para evitar conflito
+      - "8085:8080"
     environment:
       - DB_HOST=sql-server
       - DB_USER=sa
@@ -49,6 +51,7 @@ services:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
       - SERVER_URL=http://localhost:8082
+      # Comunicação interna via Docker Network continua na porta 8080
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_APPLICATION_STARTUP=false

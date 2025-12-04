@@ -8,7 +8,8 @@ const getApiUrl = () => {
     // Se a URL termina com /query, remove para pegar a base
     return envUrl.replace('/query', '/chat');
   }
-  return "http://localhost:8080/api/v1/chat";
+  // Atualizado fallback para 8085
+  return "http://localhost:8085/api/v1/chat";
 };
 
 export const sendMessageToAgent = async (
@@ -44,7 +45,7 @@ export const sendMessageToAgent = async (
   } catch (error: any) {
     console.error("Erro ao comunicar com Backend:", error);
     return { 
-      text: `Erro de conexão com o servidor Docker: ${error.message}. Verifique se o container 'salesbot-api' está rodando na porta 8080.` 
+      text: `Erro de conexão com o servidor Docker: ${error.message}. Verifique se o container 'salesbot-api' está rodando na porta 8085.` 
     };
   }
 };

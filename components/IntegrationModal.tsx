@@ -23,7 +23,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [dockerPort, setDockerPort] = useState('8080');
 
   // WhatsApp Gateway States
-  const [gatewayUrl, setGatewayUrl] = useState('http://localhost:8081');
+  const [gatewayUrl, setGatewayUrl] = useState('http://localhost:8082');
   const [sessionName, setSessionName] = useState('vendas_bot');
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api'); // Deve bater com o docker-compose
 
@@ -102,7 +102,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       
       // Fallback Demo apenas para não travar UI se o usuário não tiver docker rodando agora
       if (err.message.includes('Failed to fetch')) {
-          setErrorMsg("Não foi possível conectar ao localhost:8081. Certifique-se que o Docker está rodando.");
+          setErrorMsg(`Não foi possível conectar ao ${gatewayUrl}. Certifique-se que o Docker está rodando e a porta 8082 está livre.`);
       }
     } finally {
       setIsLoading(false);
@@ -202,7 +202,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
              <div>
                <h4 className="text-sm font-bold text-yellow-800">Uso com Evolution API (Docker)</h4>
                <p className="text-xs text-yellow-700 mt-1">
-                 Configure a conexão com o container Evolution API rodando na porta 8081.
+                 Configure a conexão com o container Evolution API rodando na porta 8082.
                </p>
              </div>
           </div>
@@ -214,7 +214,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                  type="text" 
                  value={gatewayUrl}
                  onChange={(e) => setGatewayUrl(e.target.value)}
-                 placeholder="http://localhost:8081"
+                 placeholder="http://localhost:8082"
                  className="w-full border rounded p-2 text-sm font-mono text-gray-700 focus:border-whatsapp-dark outline-none" 
                />
              </div>
@@ -284,53 +284,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           </p>
         </div>
       )}
-    </div>
-  );
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="bg-slate-900 p-4 flex justify-between items-center text-white shrink-0">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <i className="fas fa-cogs"></i>
-            Configurações do Sistema
-          </h2>
-          <button onClick={onClose} className="hover:bg-white/20 p-2 rounded-full transition">
-            <i className="fas fa-times"></i>
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex border-b bg-gray-50 shrink-0">
-          <button
-            className={`flex-1 py-3 text-sm font-medium transition flex items-center justify-center gap-2 ${
-              activeTab === 'qrcode' 
-                ? 'border-b-2 border-whatsapp-dark text-whatsapp-dark bg-white' 
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-            }`}
-            onClick={() => setActiveTab('qrcode')}
-          >
-            <i className="fab fa-whatsapp"></i> Conexão WhatsApp
-          </button>
-          <button
-            className={`flex-1 py-3 text-sm font-medium transition flex items-center justify-center gap-2 ${
-              activeTab === 'infra' 
-                ? 'border-b-2 border-slate-900 text-slate-900 bg-white' 
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-            }`}
-            onClick={() => setActiveTab('infra')}
-          >
-            <i className="fas fa-database"></i> Infra (Docker/SQL)
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="p-6 overflow-y-auto">
-          {activeTab === 'infra' && renderInfraTab()}
-          {activeTab === 'qrcode' && renderWhatsappTab()}
-        </div>
-      </div>
     </div>
   );
 };

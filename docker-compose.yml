@@ -31,11 +31,12 @@ services:
       # Porta Externa 8085 mapeada para Interna 8080 para evitar conflito
       - "8085:8080"
     environment:
-      - DB_HOST=sql-server
-      - DB_USER=sa
-      - DB_PASS=YourStrongPass123!
+      - DB_HOST=consulta.flagcloud.com.br
+      - DB_USER=SQL10071188
+      - DB_PASS=SQL2020/R@1nh@
       - DB_NAME=flexx10071188
-      - API_KEY=${API_KEY}
+      # --- COLE SUA CHAVE ABAIXO E SALVE O ARQUIVO ---
+      - API_KEY=AIzaSyD3CWke74l_fRJ18gmug1Himb4y7Sf5if8
       - SECRET_KEY=minha-senha-secreta-api
     depends_on:
       - sql-server

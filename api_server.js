@@ -40,16 +40,19 @@ DIRETRIZES DE SEGURANÇA E VERACIDADE (CRÍTICO):
 3. **RESPOSTA NEGATIVA**: Se a tool retornar uma lista vazia, responda: "Não encontrei nenhum registro com o ID informado". NÃO tente chutar um nome próximo.
 4. **HIERARQUIA**: A verdade absoluta está no retorno das ferramentas. Se a ferramenta diz que o ID 106 é "Maria", então é "Maria".
 
+TERMINOLOGIA DE NEGÓCIO (IMPORTANTE):
+- **"SETOR"** = **ID DO VENDEDOR** (Código). Ex: "Setor 502" significa "Vendedor ID 502".
+- **"ROTA"** = Geralmente refere-se à localização ou cadastro do cliente.
+
 SUAS FERRAMENTAS:
 1. **get_sales_team**: Use para descobrir identidade de funcionários.
-   - Parâmetros: 'id' (para busca exata de código) ou 'searchName' (para busca de texto).
-   - Ex: "Quem é o 106?" -> Chame get_sales_team({ id: 106 }).
-   - Ex: "Quem é o Carlos?" -> Chame get_sales_team({ searchName: "Carlos" }).
+   - Parâmetros: 'id' (para busca exata de código/setor) ou 'searchName' (para busca de texto).
+   - Ex: "Quem é o setor 106?" -> Chame get_sales_team({ id: 106 }).
 
 2. **get_customer_base**: Use para buscar informações cadastrais de clientes.
    
 3. **query_sales_data**: Use APENAS para buscar VENDAS e VALORES.
-   - Não use esta tool para descobrir "Quem é o vendedor X". Use a tool 1 para isso.
+   - Ex: "Vendas do setor 502" -> Chame query_sales_data({ sellerId: 502 }).
 
 REGRAS DE DATA:
 - Se o usuário disser "últimos X dias", calcule as datas com base em ${today}.
@@ -64,11 +67,11 @@ REGRAS DE DATA:
 // Tool 1: Equipe de Vendas (Atualizada com ID)
 const salesTeamTool = {
     name: "get_sales_team",
-    description: "Consulta a tabela de funcionários para identificar Vendedores, Supervisores ou Motoristas pelo ID ou Nome.",
+    description: "Consulta a tabela de funcionários para identificar Vendedores (Setores), Supervisores ou Motoristas pelo ID ou Nome.",
     parameters: {
         type: "OBJECT",
         properties: {
-            id: { type: "INTEGER", description: "Código exato do funcionário (Ex: 106)" },
+            id: { type: "INTEGER", description: "Código exato do funcionário/setor (Ex: 106)" },
             searchName: { type: "STRING", description: "Nome parcial para filtrar" },
             role: { type: "STRING", description: "Filtrar por cargo" }
         }
@@ -99,7 +102,7 @@ const querySalesTool = {
       startDate: { type: "STRING", description: "YYYY-MM-DD" },
       endDate: { type: "STRING", description: "YYYY-MM-DD" },
       sellerName: { type: "STRING", description: "Nome do Vendedor" },
-      sellerId: { type: "INTEGER", description: "Código/ID do Vendedor" },
+      sellerId: { type: "INTEGER", description: "Código/ID do Vendedor (Também chamado de 'Setor')" },
       supervisorName: { type: "STRING" },
       customerId: { type: "INTEGER" },
       customerName: { type: "STRING" },

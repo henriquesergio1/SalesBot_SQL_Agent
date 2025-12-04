@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 
 interface IntegrationModalProps {
@@ -17,11 +16,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Infra states
-  const [dockerApiUrl, setDockerApiUrl] = useState('http://localhost:8085'); 
+  // Infra states - Auto-detecta o IP da máquina atual
+  const [dockerApiUrl, setDockerApiUrl] = useState(`http://${window.location.hostname}:8085`); 
 
   // WhatsApp Gateway States
-  const [gatewayUrl, setGatewayUrl] = useState('http://localhost:8082');
+  const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
   const [sessionName, setSessionName] = useState('vendas_bot');
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
 
@@ -33,6 +32,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             // Remove o /api/v1/chat para mostrar só a base
             const baseUrl = savedApi.split('/api/v1')[0];
             setDockerApiUrl(baseUrl);
+        } else {
+            // Se não tiver salvo, garante que usa o hostname atual
+            setDockerApiUrl(`http://${window.location.hostname}:8085`);
         }
     }
   }, [isOpen]);
@@ -69,7 +71,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!createResponse.ok && createResponse.status !== 403) {
          const errData = await createResponse.json().catch(() => ({}));
          if (!JSON.stringify(errData).includes('already exists')) {
-             throw new Error(`Erro ao criar instância. Verifique se a porta 8082 está correta.`);
+             throw new Error(`Erro ao criar instância. Verifique se a porta 8082 está correta e o container rodando.`);
          }
       }
 
@@ -95,7 +97,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique se o container Gateway está rodando.`);
+      setErrorMsg(`Falha: ${err.message}. Verifique o IP do gateway e se o container está rodando.`);
     } finally {
       setIsLoading(false);
     }
@@ -138,7 +140,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                         <h4 className="text-blue-800 font-bold text-sm mb-1">Endereço da API (Docker)</h4>
                         <p className="text-xs text-blue-600 mb-2">
-                           Se você estiver acessando de outro PC, troque "localhost" pelo IP do servidor onde o Docker está rodando (ex: 192.168.1.50).
+                           Detectamos que seu IP atual é <strong>{window.location.hostname}</strong>. Se estiver acessando de outro computador, este endereço deve funcionar.
                         </p>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL da API</label>
                         <input 
@@ -165,6 +167,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </p>
                     </div>
                     <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway</label>
+                         <input 
+                            type="text" 
+                            value={gatewayUrl}
+                            onChange={(e) => setGatewayUrl(e.target.value)}
+                            className="w-full border rounded p-2 text-sm mb-2" 
+                        />
+
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
                         <input 
                             type="text" 

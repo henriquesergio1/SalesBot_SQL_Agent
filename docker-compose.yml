@@ -40,7 +40,7 @@ services:
 
   # 3. WhatsApp Gateway (WPPConnect)
   whatsapp-gateway:
-    image: wppconnect/server:latest 
+    image: wppconnect-team/wppconnect-server:latest
     container_name: whatsapp-gateway
     restart: always
     ports:

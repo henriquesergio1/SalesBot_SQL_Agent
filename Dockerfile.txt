@@ -1,6 +1,6 @@
 # Estágio 1: Build da Aplicação React
-# Usando Debian Bullseye (node:18) para estabilidade máxima de build
-FROM node:18-bullseye as build
+# Usando Node 20 (Debian) para garantir dependências do sistema
+FROM node:20 as build
 
 WORKDIR /app
 
@@ -10,9 +10,8 @@ RUN npm config set registry https://registry.npmjs.org/
 
 COPY package.json ./
 
-# Instala dependências de forma limpa
-# O flag --legacy-peer-deps é mantido por segurança com versões de React/Vite
-RUN npm install --legacy-peer-deps --no-audit
+# Instala dependências de forma limpa, ignorando o lockfile antigo para evitar conflitos
+RUN npm install --legacy-peer-deps --no-audit --no-package-lock
 
 COPY . .
 

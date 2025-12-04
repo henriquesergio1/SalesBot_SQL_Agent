@@ -1,11 +1,15 @@
-FROM node:18-bullseye
+FROM node:20
 
 WORKDIR /app
 
+# Initialize package.json
 RUN npm init -y
+# Set to module to allow 'import' in .js files
+RUN npm pkg set type="module"
+# Disable SSL strictness for stability
 RUN npm config set strict-ssl false
 
-# Instala drivers SQL e IA no backend (onde devem ficar)
+# Install dependencies
 RUN npm install express mssql cors @google/genai --save
 
 COPY api_server.js .

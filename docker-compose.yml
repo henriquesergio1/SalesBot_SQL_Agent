@@ -40,7 +40,8 @@ services:
 
   # 3. WhatsApp Gateway (WPPConnect)
   whatsapp-gateway:
-    image: ghcr.io/wppconnect-team/wppconnect-server:latest
+    # Usando imagem do Docker Hub (Pública) para evitar erro de 'denied' no ghcr.io
+    image: wppconnect/wppconnect-server:latest
     container_name: whatsapp-gateway
     restart: always
     ports:
@@ -48,8 +49,6 @@ services:
     environment:
       - SECRET_KEY=minha-senha-secreta-api
       - PORT=21465
-      # Define o Webhook para onde o WPPConnect enviará as mensagens recebidas
-      # Nota: Usamos o nome do container 'salesbot-api' na rede interna do Docker
       - WEBHOOK_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
     volumes:
       - whatsapp_sessions:/usr/src/app/tokens

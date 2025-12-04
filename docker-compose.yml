@@ -1,0 +1,72 @@
+
+version: '3.8'
+
+services:
+  # 1. Frontend Application (O Painel React)
+  salesbot-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.txt
+    container_name: salesbot-web
+    restart: always
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:8080/api/v1/query
+      - VITE_GATEWAY_URL=http://localhost:8081
+      - VITE_USE_MOCK=false
+      - API_KEY=${API_KEY} 
+    depends_on:
+      - salesbot-api
+      - whatsapp-gateway
+
+  # 2. SQL API Connector (Node.js + SQL Server + AI Agent Backend)
+  salesbot-api:
+    image: node:18-alpine 
+    container_name: salesbot-api
+    working_dir: /app
+    # Instala dependências do servidor (Express, SQL, Google GenAI)
+    command: sh -c "npm install express mssql cors @google/genai && node api_server.js" 
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_HOST=sql-server
+      - DB_USER=sa
+      - DB_PASS=YourStrongPass123!
+      - API_KEY=${API_KEY}
+    volumes:
+      - ./api_server.js:/app/api_server.js
+    depends_on:
+      - sql-server
+
+  # 3. WhatsApp Gateway (WPPConnect)
+  whatsapp-gateway:
+    image: wppconnect/server:latest 
+    container_name: whatsapp-gateway
+    restart: always
+    ports:
+      - "8081:21465" 
+    environment:
+      - SECRET_KEY=minha-senha-secreta-api
+      - PORT=21465
+      # Define o Webhook para onde o WPPConnect enviará as mensagens recebidas
+      - WEBHOOK_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
+    volumes:
+      - whatsapp_sessions:/usr/src/app/tokens
+
+  # 4. SQL Server (Banco de Dados Local)
+  sql-server:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: salesbot-db
+    restart: always
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrongPass123!
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql_data:/var/opt/mssql
+
+volumes:
+  sql_data:
+  whatsapp_sessions:

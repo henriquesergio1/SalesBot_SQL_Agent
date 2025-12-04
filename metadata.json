@@ -1,0 +1,5 @@
+{
+  "name": "SalesBot SQL Agent",
+  "description": "An AI-powered sales assistant interface that queries a SQL Server (simulated or real) to provide instant insights on sales, revenue, and product performance via a chat interface.",
+  "requestFramePermissions": []
+}

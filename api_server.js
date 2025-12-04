@@ -99,7 +99,7 @@ INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPD
 INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
 INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE
 INNER JOIN flexx10071188.dbo.IBETFAMITE IBETFAMITE ON IBETCATITE.CODFAMITE = IBETFAMITE.CODFAMITE AND IBETFAMITE.CODGPOITE = IBETCATITE.CODGPOITE
-INNER JOIN flexx10071188.dbo.IBETMIXITE IBETCATITE.CODMIXITE = IBETMIXITE.CODMIXITE
+INNER JOIN flexx10071188.dbo.IBETMIXITE IBETMIXITE ON IBETCATITE.CODMIXITE = IBETMIXITE.CODMIXITE
 INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
 INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI
 INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD
@@ -315,7 +315,6 @@ app.post('/api/v1/query', async (req, res) => {
 
 // ROTA 3: Webhook WhatsApp (EVOLUTION API FORMAT)
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    // Evolution API sends data in a specific structure
     const data = req.body;
     
     // Check if it's a message event
@@ -323,31 +322,30 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
         return res.json({ status: 'ignored' });
     }
 
-    // Extract message content safely
     const messageData = data.data;
     const sender = messageData?.key?.remoteJid;
     const pushName = messageData?.pushName;
-    
-    // Extract text from various possible locations in Evolution payload
+    const instanceName = data.instance || 'vendas_bot'; // Pega o nome da instancia dinamicamente
+
+    // Extract text
     const userText = 
         messageData?.message?.conversation || 
         messageData?.message?.extendedTextMessage?.text || 
         null;
 
     if (!userText || !sender || sender.includes('@g.us')) {
-        // Ignore groups or empty messages
         return res.json({ status: 'ignored' });
     }
 
-    console.log(`[WhatsApp Evolution] ${pushName} (${sender}): ${userText}`);
+    console.log(`[WhatsApp Evolution] ${pushName} (${sender}) on [${instanceName}]: ${userText}`);
     
-    // Process async to avoid timeout
-    processWhatsappResponse(sender, userText);
+    // Process async
+    processWhatsappResponse(sender, userText, instanceName);
     
     res.json({ status: 'processing' });
 });
 
-async function processWhatsappResponse(sender, userText) {
+async function processWhatsappResponse(sender, userText, instanceName) {
     try {
         const chat = aiClient.chats.create({
             model: "gemini-2.5-flash",
@@ -375,21 +373,18 @@ async function processWhatsappResponse(sender, userText) {
             }
         }
 
-        if (finalResponseText) await sendWhatsappMessage(sender, finalResponseText);
+        if (finalResponseText) await sendWhatsappMessage(sender, finalResponseText, instanceName);
     } catch (error) {
         console.error("[WhatsApp AI] Erro:", error);
-        await sendWhatsappMessage(sender, "Desculpe, ocorreu um erro ao consultar os dados.");
+        await sendWhatsappMessage(sender, "Desculpe, ocorreu um erro ao consultar os dados.", instanceName);
     }
 }
 
-async function sendWhatsappMessage(to, text) {
-    const gatewayUrl = 'http://whatsapp-gateway:8080'; // Internal Docker URL for Evolution
-    const session = 'vendas_bot'; // Default instance name
+async function sendWhatsappMessage(to, text, session) {
+    const gatewayUrl = 'http://whatsapp-gateway:8080';
     const secret = process.env.SECRET_KEY || 'minha-senha-secreta-api';
     
     try {
-        // Clean the number format for Evolution (it expects numbers only usually, but remoteJid is safe)
-        // Evolution v1 endpoint: /message/sendText/{instance}
         const number = to.replace('@s.whatsapp.net', '').replace('@c.us', '');
 
         const payload = {

@@ -9,7 +9,7 @@ services:
     container_name: salesbot-web
     restart: always
     ports:
-      - "3000:80"
+      - "3005:80"
     environment:
       # Atualizado para porta 8085 (externa)
       - VITE_API_URL=http://localhost:8085/api/v1/query

@@ -27,20 +27,34 @@ const sqlConfig = {
 
 const aiClient = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
-const SYSTEM_INSTRUCTION = `
-Você é o "SalesBot", um assistente de vendas conectado diretamente ao SQL Server da empresa via WhatsApp e Web.
-Seu objetivo é responder perguntas da equipe de vendas de forma rápida e precisa.
+// Função para gerar instrução dinâmica com a data de hoje
+const getSystemInstruction = () => {
+    const today = new Date().toISOString().split('T')[0];
+    return `
+Você é o "SalesBot", um assistente de vendas conectado diretamente ao SQL Server.
+HOJE É: ${today}.
 
-1. USE SEMPRE a ferramenta 'query_sales_data' para buscar números, datas ou performances.
-2. A moeda é BRL (R$). Formate como R$ 1.200,00.
-3. Se a ferramenta retornar dados, analise-os e dê uma resposta resumida. Destaque totais.
-4. Se o usuário não especificar data, assuma que são os "últimos 30 dias" (o sistema filtra automaticamente).
-5. Se não encontrar dados, diga claramente "Não encontrei vendas com esses critérios".
-6. Seja profissional e direto.
+Seu objetivo é responder perguntas da equipe de vendas usando a ferramenta 'query_sales_data'.
+
+REGRAS DE DATA (MUITO IMPORTANTE):
+1. O usuário raramente diz o ano. Assuma o ano atual.
+2. Se o usuário disser "últimos X dias" ou "semana passada", CALCULE as datas baseadas em ${today} e passe para os campos 'startDate' e 'endDate'.
+   Ex: "Últimos 10 dias" (sendo hoje 2023-10-20) -> startDate: "2023-10-10", endDate: "2023-10-20".
+3. Se não houver menção de data, NÃO envie startDate/endDate (o sistema usará padrão de 30 dias).
+
+REGRAS DE FILTRO:
+1. Você pode filtrar por Vendedor, Supervisor, Motorista, Cidade, Produto, Status, etc.
+2. Se o usuário buscar por algo genérico (ex: "vendas da Nestle"), use o campo 'generalSearch' ou o campo específico se tiver certeza (ex: 'line' ou 'product').
+
+FORMATAÇÃO:
+1. A moeda é BRL (R$). Formate como R$ 1.200,00.
+2. Seja direto. Destaque totais e rankings se houver muitos dados.
+3. Se não encontrar dados, diga: "Não encontrei vendas para [critérios] no período."
 `;
+};
 
 // ==================================================================================
-// 2. QUERY REAL (Adaptada)
+// 2. QUERY REAL (Baseada no Script do Usuário)
 // ==================================================================================
 
 const BASE_SQL_QUERY = `
@@ -130,7 +144,9 @@ GROUP BY
 ORDER BY ibetpdd.DATEMSDOCPDD DESC
 `;
 
+// Mapa completo para ligar IA -> Coluna SQL
 const COLUMN_MAP = {
+    // Básicos
     date: 'Data',
     product: 'Item Descrição',
     category: 'Familia', 
@@ -139,21 +155,37 @@ const COLUMN_MAP = {
     total: 'Valor Liquido',
     seller: 'Nome Vendedor',
     region: 'UF', 
-    paymentMethod: 'Cond. Pagamento'
+    // Novos Campos
+    supervisor: 'Nome Supervisor',
+    driver: 'Motorista',
+    city: 'Cidade',
+    status: 'Status',
+    paymentMethod: 'Cond. Pagamento',
+    line: 'Linha',
+    channel: 'Canal Remuneração',
+    customer: 'Razao Social'
 };
 
 const querySalesTool = {
   name: "query_sales_data",
-  description: "Consulta vendas. Retorna dados financeiros e de produtos filtrados por data e vendedor.",
+  description: "Consulta vendas complexas. Use para filtrar por vendedor, supervisor, produto, motorista, cidade, etc.",
   parameters: {
     type: "OBJECT",
     properties: {
-      seller: { type: "STRING", description: "Nome do vendedor." },
-      product: { type: "STRING", description: "Nome do produto ou Item." },
-      category: { type: "STRING", description: "Categoria ou Familia." },
-      region: { type: "STRING", description: "UF ou Cidade." },
       startDate: { type: "STRING", description: "YYYY-MM-DD" },
       endDate: { type: "STRING", description: "YYYY-MM-DD" },
+      // Filtros específicos
+      seller: { type: "STRING", description: "Nome do Vendedor" },
+      supervisor: { type: "STRING", description: "Nome do Supervisor" },
+      driver: { type: "STRING", description: "Nome do Motorista" },
+      city: { type: "STRING", description: "Nome da Cidade" },
+      product: { type: "STRING", description: "Nome do Produto ou Item" },
+      category: { type: "STRING", description: "Família ou Categoria" },
+      status: { type: "STRING", description: "'VENDA' ou 'DEVOLUÇÃO'" },
+      line: { type: "STRING", description: "Linha de produto (ex: FOOD, SECA)" },
+      paymentMethod: { type: "STRING", description: "Condição de Pagamento" },
+      // Busca geral
+      generalSearch: { type: "STRING", description: "Termo de busca genérico se não souber o campo específico" }
     },
   },
 };
@@ -177,28 +209,48 @@ async function executeDynamicQuery(params) {
     request.input('endDate', sql.Date, effectiveEndDate);
 
     console.log(`[SQL] Query ${effectiveStartDate} to ${effectiveEndDate}`);
+    console.log(`[Filter] Params:`, params);
 
     try {
         const result = await request.query(BASE_SQL_QUERY);
         let data = result.recordset;
 
-        // JS Filtering
-        if (params.seller) {
-            const search = params.seller.toLowerCase();
-            data = data.filter(r => r[COLUMN_MAP.seller] && r[COLUMN_MAP.seller].toLowerCase().includes(search));
-        }
-        if (params.product) {
-            const search = params.product.toLowerCase();
-            data = data.filter(r => r[COLUMN_MAP.product] && r[COLUMN_MAP.product].toLowerCase().includes(search));
-        }
-        if (params.category) {
-            const search = params.category.toLowerCase();
-            data = data.filter(r => r[COLUMN_MAP.category] && r[COLUMN_MAP.category].toLowerCase().includes(search));
-        }
-        if (params.region) {
-            const search = params.region.toLowerCase();
-            data = data.filter(r => r[COLUMN_MAP.region] && r[COLUMN_MAP.region].toLowerCase().includes(search));
-        }
+        // --- FILTRAGEM JAVASCRIPT AVANÇADA ---
+
+        // Função auxiliar de filtro (case insensitive)
+        const filterBy = (rowCol, val) => {
+            if (!val) return true;
+            const rowVal = rowCol ? String(rowCol).toLowerCase() : '';
+            return rowVal.includes(val.toLowerCase());
+        };
+
+        data = data.filter(r => {
+            // Filtros Específicos
+            const matchSeller = filterBy(r[COLUMN_MAP.seller], params.seller);
+            const matchSup = filterBy(r[COLUMN_MAP.supervisor], params.supervisor);
+            const matchDriver = filterBy(r[COLUMN_MAP.driver], params.driver);
+            const matchCity = filterBy(r[COLUMN_MAP.city], params.city);
+            const matchProd = filterBy(r[COLUMN_MAP.product], params.product);
+            const matchCat = filterBy(r[COLUMN_MAP.category], params.category);
+            const matchStatus = filterBy(r[COLUMN_MAP.status], params.status);
+            const matchLine = filterBy(r[COLUMN_MAP.line], params.line);
+            const matchPay = filterBy(r[COLUMN_MAP.paymentMethod], params.paymentMethod);
+            
+            // Filtro Geral (General Search)
+            let matchGeneral = true;
+            if (params.generalSearch) {
+                const term = params.generalSearch.toLowerCase();
+                // Verifica se o termo existe em ALGUMA das colunas principais
+                matchGeneral = Object.values(COLUMN_MAP).some(colName => {
+                    const cellVal = r[colName] ? String(r[colName]).toLowerCase() : '';
+                    return cellVal.includes(term);
+                });
+            }
+
+            return matchSeller && matchSup && matchDriver && matchCity && 
+                   matchProd && matchCat && matchStatus && matchLine && 
+                   matchPay && matchGeneral;
+        });
 
         return data;
     } catch (err) {
@@ -218,8 +270,12 @@ function formatDataForFrontend(rawData) {
         unitPrice: row[COLUMN_MAP.unitPrice],
         total: row[COLUMN_MAP.total],
         seller: row[COLUMN_MAP.seller],
-        region: row[COLUMN_MAP.region],
-        paymentMethod: row[COLUMN_MAP.paymentMethod]
+        region: row[COLUMN_MAP.region], // Usado como UF no gráfico
+        paymentMethod: row[COLUMN_MAP.paymentMethod],
+        // Dados Extras para IA (não necessariamente usados no gráfico, mas úteis para contexto)
+        supervisor: row[COLUMN_MAP.supervisor],
+        city: row[COLUMN_MAP.city],
+        driver: row[COLUMN_MAP.driver]
     }));
 
     const totalRevenue = normalizedData.reduce((acc, curr) => acc + (curr.total || 0), 0);
@@ -244,11 +300,10 @@ function formatDataForFrontend(rawData) {
     };
 }
 
-// ROTA 1: API CHAT (WEB) - NOVO
+// ROTA 1: API CHAT (WEB)
 app.post('/api/v1/chat', async (req, res) => {
     const { message, history } = req.body;
     try {
-        // Constrói histórico para o Gemini (User/Model)
         let chatHistory = [];
         if (history && Array.isArray(history)) {
              chatHistory = history
@@ -261,7 +316,8 @@ app.post('/api/v1/chat', async (req, res) => {
 
         const chat = aiClient.chats.create({
             model: "gemini-2.5-flash",
-            config: { systemInstruction: SYSTEM_INSTRUCTION, tools: tools },
+            // INSTRUÇÃO DINÂMICA (Com data de hoje)
+            config: { systemInstruction: getSystemInstruction(), tools: tools },
             history: chatHistory
         });
 
@@ -278,10 +334,7 @@ app.post('/api/v1/chat', async (req, res) => {
                     console.log(`[AI-Web] Tool Call:`, call.args);
                     const sqlResult = await executeDynamicQuery(call.args);
                     
-                    // Formata os dados para o Dashboard Frontend
                     dataContext = formatDataForFrontend(sqlResult);
-
-                    // Resume para a IA gerar o texto
                     const summary = sqlResult.length > 20 ? sqlResult.slice(0, 20) : sqlResult;
                     
                     const fnRes = await chat.sendMessage({
@@ -302,7 +355,7 @@ app.post('/api/v1/chat', async (req, res) => {
     }
 });
 
-// ROTA 2: API Query Direta (Compatibilidade antiga)
+// ROTA 2: API Query Direta
 app.post('/api/v1/query', async (req, res) => {
     try {
         const rawData = await executeDynamicQuery(req.body);
@@ -313,11 +366,10 @@ app.post('/api/v1/query', async (req, res) => {
     }
 });
 
-// ROTA 3: Webhook WhatsApp (EVOLUTION API FORMAT)
+// ROTA 3: Webhook WhatsApp
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const data = req.body;
     
-    // Check if it's a message event
     if (data.type !== 'message' && !data.data?.message) {
         return res.json({ status: 'ignored' });
     }
@@ -325,9 +377,8 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const messageData = data.data;
     const sender = messageData?.key?.remoteJid;
     const pushName = messageData?.pushName;
-    const instanceName = data.instance || 'vendas_bot'; // Pega o nome da instancia dinamicamente
+    const instanceName = data.instance || 'vendas_bot'; 
 
-    // Extract text
     const userText = 
         messageData?.message?.conversation || 
         messageData?.message?.extendedTextMessage?.text || 
@@ -337,11 +388,8 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
         return res.json({ status: 'ignored' });
     }
 
-    console.log(`[WhatsApp Evolution] ${pushName} (${sender}) on [${instanceName}]: ${userText}`);
-    
-    // Process async
+    console.log(`[WhatsApp] ${pushName}: ${userText}`);
     processWhatsappResponse(sender, userText, instanceName);
-    
     res.json({ status: 'processing' });
 });
 
@@ -349,7 +397,8 @@ async function processWhatsappResponse(sender, userText, instanceName) {
     try {
         const chat = aiClient.chats.create({
             model: "gemini-2.5-flash",
-            config: { systemInstruction: SYSTEM_INSTRUCTION, tools: tools }
+            // INSTRUÇÃO DINÂMICA
+            config: { systemInstruction: getSystemInstruction(), tools: tools }
         });
 
         const result = await chat.sendMessage({ message: userText });
@@ -386,31 +435,19 @@ async function sendWhatsappMessage(to, text, session) {
     
     try {
         const number = to.replace('@s.whatsapp.net', '').replace('@c.us', '');
-
         const payload = {
             number: number,
-            options: {
-                delay: 1000,
-                presence: "composing"
-            },
-            textMessage: {
-                text: text
-            }
+            options: { delay: 1000, presence: "composing" },
+            textMessage: { text: text }
         };
 
-        const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
+        await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'apikey': secret 
-            },
+            headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify(payload)
         });
-
-        const respData = await response.json();
-        console.log("[Gateway] Send result:", respData);
     } catch (err) {
-        console.error("Gateway Offline?", err.message);
+        console.error("Gateway Error:", err.message);
     }
 }
 

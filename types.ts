@@ -9,6 +9,14 @@ export interface SalesRecord {
   seller: string;
   region: string;
   paymentMethod: string;
+  // Novos campos da Query Complexa
+  supervisor?: string;
+  driver?: string;
+  city?: string;
+  status?: string;
+  line?: string;
+  channel?: string; // Canal Remuneração
+  customer?: string; // Razão Social
 }
 
 export interface ChatMessage {
@@ -27,6 +35,13 @@ export interface FilterParams {
   product?: string;
   category?: string;
   region?: string;
+  // Novos Filtros
+  supervisor?: string;
+  driver?: string;
+  city?: string;
+  status?: string;
+  line?: string;
+  generalSearch?: string;
 }
 
 export interface SalesSummary {

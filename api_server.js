@@ -52,11 +52,15 @@ DEFINIÇÕES:
 
 REGRAS VISUAIS:
 1. **SEMPRE** mostre o CÓDIGO/ID antes do nome (Ex: "101 - Mercado X").
+2. **LISTAGEM**: Se a ferramenta retornar uma lista de itens (clientes, produtos, visitas), VOCÊ DEVE LISTAR ELES NO CHAT. Use bullet points (*).
+   - Exemplo Rota:
+     * 101 - Padaria A (PENDENTE)
+     * 102 - Mercado B (POSITIVADO)
 
 FERRAMENTAS (TOOLS):
 1. **get_scheduled_visits**: Retorna a Rota e o STATUS DE COBERTURA.
    - Use para: "Minha rota de hoje", "Quem falta positivar na rota?", "Quantos da rota já compraram?".
-   - O retorno informará quem está POSITIVADO e quem está PENDENTE.
+   - O retorno conterá uma lista de texto simplificada para você exibir no chat.
 2. **query_sales_data**: Para totais de vendas e COBERTURA GERAL.
    - Retorna o campo 'totalCoverage' (Clientes Únicos).
    - Use para: "Qual minha cobertura total este mês?", "Vendas totais".
@@ -65,7 +69,8 @@ FERRAMENTAS (TOOLS):
 
 COMPORTAMENTO:
 - Ao analisar a rota, destaque quantos clientes já foram positivados e quantos faltam.
-- Sugira foco nos clientes "PENDENTES" da rota.
+- Liste os clientes pendentes para ajudar o vendedor.
+- Se a lista for muito longa, mostre os primeiros 10 e diga "e mais X clientes...".
 `;
 };
 
@@ -319,12 +324,24 @@ async function executeToolCall(name, args) {
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
+            
+            // CRITICAL: Lista simplificada para o Chat do WhatsApp
+            // A IA precisa "ler" essa lista para poder escrever no chat.
+            const listaSimples = result.recordset.slice(0, 30).map(r => 
+                `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`
+            );
+
+            if (result.recordset.length > 30) {
+                listaSimples.push(`... e mais ${result.recordset.length - 30} clientes.`);
+            }
 
             const summary = {
                 data_rota: date,
                 total_clientes_rota: total,
                 ja_compraram_mes: positivados,
                 pendentes_cobertura: pendentes,
+                // Injetamos a lista aqui para a IA ler
+                LISTA_DETALHADA_PARA_CHAT: listaSimples,
                 status_geral: `De ${total} clientes na rota, ${positivados} já foram cobertos no mês.`
             };
 
@@ -340,8 +357,14 @@ async function executeToolCall(name, args) {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
             
+            const listaProdutos = result.recordset.map(p => p.descricao);
+
             return {
-                ai_response: { oportunidades_encontradas: result.recordset.length, top_produtos: result.recordset },
+                ai_response: { 
+                    oportunidades_encontradas: result.recordset.length, 
+                    // Lista simples para o Chat
+                    lista_produtos_sugeridos: listaProdutos 
+                },
                 frontend_data: result.recordset,
                 debug_meta: { period: 'Últimos 4 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' }
             };
@@ -504,7 +527,13 @@ async function executeToolCall(name, args) {
                 
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-                aiPayload.top_grupos = aggResult.recordset.slice(0, 10);
+                
+                // CRITICAL: Se for top list (clientes, produtos), envia lista simples pra IA também
+                if (aggResult.recordset.length > 0) {
+                     aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 15).map(r => 
+                        `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`
+                     );
+                }
 
             } else {
                 let detailQuery = `

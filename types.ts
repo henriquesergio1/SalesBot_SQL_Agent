@@ -24,20 +24,19 @@ export interface SalesRecord {
 }
 
 export interface VisitRecord {
-    cod_vend: number;
-    nome_vendedor: string;
-    cod_cliente: number;
-    razao_social: string;
-    dia_semana: string;
-    periodicidade: string;
-    data_visita: string;
+    CodVend: number;
+    NomeVendedor: string;
+    CodCliente: number;
+    RazaoSocial: string;
+    DiaSemana?: string;
+    Periodicidade: string;
+    DataVisita: string;
 }
 
 export interface OpportunityRecord {
     cod_produto: number;
     descricao: string;
     grupo: string;
-    ultima_compra: string; // Data
 }
 
 export interface ChatMessage {

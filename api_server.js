@@ -43,31 +43,29 @@ Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${today}.
 
 OBJETIVO:
-Ajudar vendedores com Metas, Vendas e **ROTA DE VISITAS**.
+Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e **COBERTURA (POSITIVAÇÃO)**.
 
-REGRAS VISUAIS (MUITO IMPORTANTE):
-1. **SEMPRE** mostre o CÓDIGO/ID antes do nome para Vendedores, Clientes, Produtos e Supervisores.
-   - Formato Correto: "101 - Supermercado X", "502 - Carlos", "200 - Bombom Garoto".
-   - Formato ERRADO: "Supermercado X", "Carlos".
-   - NUNCA remova o ID que a ferramenta retornar.
+DEFINIÇÕES:
+- **COBERTURA**: Número de clientes únicos que compraram. Se vendi 10 vezes para o mesmo cliente, Cobertura = 1.
+- **POSITIVADO**: Cliente que já comprou no mês atual.
+- **PENDENTE**: Cliente que está na rota mas ainda não comprou no mês.
+
+REGRAS VISUAIS:
+1. **SEMPRE** mostre o CÓDIGO/ID antes do nome (Ex: "101 - Mercado X").
 
 FERRAMENTAS (TOOLS):
-1. **get_scheduled_visits** (NOVA): Use quando perguntarem "Quais clientes visitar hoje?", "Minha rota", "Agenda".
-   - Requer ID do Vendedor. Se não souber, pergunte ou use get_sales_team.
-2. **analyze_client_gap** (NOVA): Use para gerar **Oportunidades**.
-   - Use quando perguntarem "O que oferecer para o cliente X?", "O que ele parou de comprar?".
-   - Identifica produtos que o cliente comprava mas não comprou este mês.
-3. **query_sales_data**: Para totais de vendas e performance.
-   - Use groupBy='product' para "Produtos mais vendidos".
-   - Use groupBy='customer' para "Melhores clientes".
-   - Use groupBy='product_group' para "Grupos mais vendidos".
-4. **get_sales_team**: Para descobrir IDs de vendedores.
-5. **get_customer_base**: Para buscar IDs de clientes.
+1. **get_scheduled_visits**: Retorna a Rota e o STATUS DE COBERTURA.
+   - Use para: "Minha rota de hoje", "Quem falta positivar na rota?", "Quantos da rota já compraram?".
+   - O retorno informará quem está POSITIVADO e quem está PENDENTE.
+2. **query_sales_data**: Para totais de vendas e COBERTURA GERAL.
+   - Retorna o campo 'totalCoverage' (Clientes Únicos).
+   - Use para: "Qual minha cobertura total este mês?", "Vendas totais".
+3. **analyze_client_gap**: Oportunidades de produtos não comprados.
+4. **get_sales_team** e **get_customer_base**: Para buscar IDs.
 
 COMPORTAMENTO:
-- Se o vendedor perguntar da rota, liste os clientes e sugira: "Quer analisar oportunidades para algum deles?"
-- Se analisar oportunidades, liste os Top 3 produtos que o cliente "esqueceu" de comprar.
-- Seja proativo.
+- Ao analisar a rota, destaque quantos clientes já foram positivados e quantos faltam.
+- Sugira foco nos clientes "PENDENTES" da rota.
 `;
 };
 
@@ -101,7 +99,7 @@ const customerBaseTool = {
 
 const visitsTool = {
     name: "get_scheduled_visits",
-    description: "Retorna a ROTA de visitas programada para um vendedor em uma data específica.",
+    description: "Retorna a ROTA de visitas programada e o STATUS DE COBERTURA (Se já comprou no mês).",
     parameters: {
         type: "OBJECT",
         properties: {
@@ -126,7 +124,7 @@ const opportunityTool = {
 
 const querySalesTool = {
   name: "query_sales_data",
-  description: "Busca vendas. Use 'groupBy' para detalhar por cliente/dia/produto.",
+  description: "Busca vendas totais e cobertura (clientes únicos).",
   parameters: {
     type: "OBJECT",
     properties: {
@@ -164,11 +162,15 @@ const SQL_QUERIES = {
         LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
         WHERE V.TPOEPG IN ('V', 'S', 'M')
     `,
-    // Query Complexa de Rota fornecida pelo usuário
+    // Query Complexa de Rota + Cobertura
     VISITS_QUERY: `
         DECLARE @DataBase DATE = @targetDate;
         DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1);
         DECLARE @DataFimMes DATE = EOMONTH(@DataBase);
+        
+        -- Datas para checagem de Cobertura (Mês Atual da Visita)
+        DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1);
+        DECLARE @FimMesAtual DATE = EOMONTH(@DataBase);
 
         WITH DatasMes AS (
             SELECT @DataInicioMes AS DataVisita
@@ -190,6 +192,14 @@ const SQL_QUERIES = {
                     WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6'
                 END AS DiaSemana
             FROM DatasMes d
+        ),
+        VendasMes AS (
+            SELECT DISTINCT CODCET, SUM(VALLIQPDD) as TotalVendido
+            FROM flexx10071188.dbo.ibetpdd
+            WHERE DATEMSDOCPDD >= @InicioMesAtual AND DATEMSDOCPDD <= @FimMesAtual
+            AND INDSTUMVTPDD = 1 -- Venda
+            AND CODMTCEPG = @sellerId
+            GROUP BY CODCET
         )
         SELECT DISTINCT
             e.CODMTCEPGVDD AS 'CodVend',
@@ -197,7 +207,9 @@ const SQL_QUERIES = {
             a.CODCET AS 'CodCliente', 
             d.NOMRAZSCLCET AS 'RazaoSocial', 
             x.DataVisita AS 'DataVisita',
-            a.DESCCOVSTCET AS 'Periodicidade'
+            a.DESCCOVSTCET AS 'Periodicidade',
+            CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'StatusCobertura',
+            ISNULL(VM.TotalVendido, 0) AS 'ValorVendidoMes'
         FROM flexx10071188.dbo.IBETVSTCET a
         INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana
         INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f 
@@ -209,6 +221,7 @@ const SQL_QUERIES = {
             ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC
         INNER JOIN flexx10071188.dbo.IBETCPLEPG epg 
             ON epg.CODMTCEPG = e.CODMTCEPGVDD
+        LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET
         WHERE d.TPOSTUCET = 'A' 
           AND x.DataVisita = @targetDate
           AND e.CODMTCEPGVDD = @sellerId
@@ -289,11 +302,11 @@ async function executeToolCall(name, args) {
         // TOOL 2: CLIENTES
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
-            const result = await request.query(`SELECT TOP 10 CODCET as id, CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
+            const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
             return result.recordset;
         }
 
-        // TOOL 4: ROTA DE VISITAS
+        // TOOL 4: ROTA DE VISITAS (COM COBERTURA)
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
             request.input('targetDate', sql.Date, date);
@@ -301,16 +314,23 @@ async function executeToolCall(name, args) {
             
             const result = await request.query(SQL_QUERIES.VISITS_QUERY);
             
+            // Cálculos para a IA
+            const total = result.recordset.length;
+            const positivados = result.recordset.filter(r => r.StatusCobertura === 'POSITIVADO').length;
+            const pendentes = total - positivados;
+
             const summary = {
-                data: date,
-                total_visitas: result.recordset.length,
-                clientes: result.recordset.map(r => `${r.CodCliente} - ${r.RazaoSocial}`)
+                data_rota: date,
+                total_clientes_rota: total,
+                ja_compraram_mes: positivados,
+                pendentes_cobertura: pendentes,
+                status_geral: `De ${total} clientes na rota, ${positivados} já foram cobertos no mês.`
             };
 
             return {
                 ai_response: summary, 
                 frontend_data: result.recordset,
-                debug_meta: { period: date, filters: [`Vendedor ${args.sellerId}`], sqlLogic: 'Rota de Visitas Complexa' }
+                debug_meta: { period: date, filters: [`Vendedor ${args.sellerId}`], sqlLogic: 'Rota + Cobertura' }
             };
         }
 
@@ -326,7 +346,7 @@ async function executeToolCall(name, args) {
             };
         }
 
-        // TOOL 3: VENDAS (OTIMIZADO)
+        // TOOL 3: VENDAS (OTIMIZADO + COBERTURA)
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -373,7 +393,6 @@ async function executeToolCall(name, args) {
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET ";
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD ";
             }
-            // Join para Supervisor se necessário
             if (args.groupBy === 'supervisor') {
                 dynamicJoins += `
                     INNER JOIN flexx10071188.dbo.ibetcplepg VENDEDOR ON ibetpdd.CODMTCEPG = VENDEDOR.CODMTCEPG
@@ -423,7 +442,8 @@ async function executeToolCall(name, args) {
                 ${BASE_CTE}
                 SELECT 
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido',
-                    COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
+                    COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos',
+                    COUNT(DISTINCT ibetpdd.CODCET) as 'Cobertura'
                 FROM pedidos_filtrados ibetpdd
                 ${ALL_JOINS}
             `;
@@ -432,11 +452,13 @@ async function executeToolCall(name, args) {
             const totalResult = await request.query(totalQuery);
             const totalLiquido = totalResult.recordset[0]['ValorLiquido'] || 0;
             const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
+            const coberturaReal = totalResult.recordset[0]['Cobertura'] || 0;
 
             let aiPayload = {
                 resumo: {
                     total_liquido_periodo: totalLiquido,
-                    total_pedidos: qtdReal
+                    total_pedidos: qtdReal,
+                    cobertura_clientes_unicos: coberturaReal
                 }
             };
 
@@ -481,7 +503,6 @@ async function executeToolCall(name, args) {
                 
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-                // Agora envia Top 10 para IA (antes era 5)
                 aiPayload.top_grupos = aggResult.recordset.slice(0, 10);
 
             } else {
@@ -545,9 +566,14 @@ async function runChatAgent(userMessage, history = []) {
             const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
             
             if (toolResult && toolResult.frontend_data) {
+                // Preserva metadados de Cobertura/Visitas para o Frontend
+                const rows = toolResult.frontend_data;
+                const isVisit = rows[0]?.['DataVisita'] !== undefined;
+                
                 dataForFrontend = { 
-                    samples: toolResult.frontend_data,
-                    debugMeta: toolResult.debug_meta 
+                    samples: rows,
+                    debugMeta: toolResult.debug_meta,
+                    totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos
                 };
                 
                 functionResponses.push({
@@ -601,6 +627,7 @@ app.post('/api/v1/chat', async (req, res) => {
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
+                totalCoverage: response.data.totalCoverage, // Envia cobertura para o Dashboard
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],

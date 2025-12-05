@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { SalesSummary } from '../types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -20,6 +21,91 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
     );
   }
 
+  // Se for dados de ROTA DE VISITAS
+  if (data.visits && data.visits.length > 0) {
+      return (
+          <div className="flex flex-col h-full animate-fade-in">
+              <h3 className="text-lg font-bold text-gray-700 mb-4 flex items-center gap-2">
+                  <i className="fas fa-route text-blue-500"></i> Rota de Visitas / Cobertura
+              </h3>
+              <div className="bg-white rounded-lg shadow overflow-hidden flex-1">
+                  <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-100 uppercase text-slate-600 border-b">
+                          <tr>
+                             <th className="p-3">Data</th>
+                             <th className="p-3">Cliente</th>
+                             <th className="p-3">Vendedor</th>
+                             <th className="p-3 text-center">Status Cobertura (Mês)</th>
+                             <th className="p-3 text-right">Vendido</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                          {data.visits.map((v, i) => (
+                              <tr key={i} className={`hover:bg-gray-50 ${v.status_cobertura === 'POSITIVADO' ? 'bg-green-50/50' : ''}`}>
+                                  <td className="p-3 font-mono text-gray-500">{new Date(v.data_visita).toLocaleDateString('pt-BR')}</td>
+                                  <td className="p-3 font-medium text-gray-800">
+                                      {v.cod_cliente} - {v.razao_social}
+                                      <div className="text-[10px] text-gray-400 font-normal">{v.periodicidade}</div>
+                                  </td>
+                                  <td className="p-3 text-gray-600">{v.cod_vend} - {v.nome_vendedor}</td>
+                                  <td className="p-3 text-center">
+                                      {v.status_cobertura === 'POSITIVADO' ? (
+                                          <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-[10px] font-bold border border-green-200">
+                                              <i className="fas fa-check mr-1"></i> POSITIVADO
+                                          </span>
+                                      ) : (
+                                          <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-full text-[10px] font-bold border border-orange-200">
+                                              <i className="fas fa-clock mr-1"></i> PENDENTE
+                                          </span>
+                                      )}
+                                  </td>
+                                  <td className="p-3 text-right font-medium">
+                                      {v.valor_vendido_mes ? v.valor_vendido_mes.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '-'}
+                                  </td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+      )
+  }
+
+  // Se for dados de OPORTUNIDADES
+  if (data.opportunities && data.opportunities.length > 0) {
+      return (
+          <div className="flex flex-col h-full animate-fade-in">
+              <h3 className="text-lg font-bold text-gray-700 mb-4 flex items-center gap-2">
+                  <i className="fas fa-lightbulb text-yellow-500"></i> Oportunidades de Positivação
+              </h3>
+              <div className="bg-white rounded-lg shadow overflow-hidden flex-1">
+                  <table className="w-full text-xs text-left">
+                      <thead className="bg-yellow-50 uppercase text-yellow-800 border-b border-yellow-200">
+                          <tr>
+                             <th className="p-3">Produto</th>
+                             <th className="p-3">Grupo</th>
+                             <th className="p-3 text-right">Ação Sugerida</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                          {data.opportunities.map((o, i) => (
+                              <tr key={i} className="hover:bg-gray-50">
+                                  <td className="p-3 font-medium text-gray-800">{o.descricao}</td>
+                                  <td className="p-3 text-gray-600">{o.grupo}</td>
+                                  <td className="p-3 text-right">
+                                      <span className="text-blue-600 cursor-pointer hover:underline">
+                                          Oferecer Produto <i className="fas fa-arrow-right ml-1"></i>
+                                      </span>
+                                  </td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+      )
+  }
+
   return (
     <div className="flex flex-col h-full animate-fade-in">
       <div className="space-y-6 flex-1 overflow-y-auto">
@@ -35,10 +121,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
             <p className="text-xs font-bold text-gray-500 uppercase">Pedidos</p>
             <p className="text-2xl font-bold text-gray-800">{data.totalOrders}</p>
           </div>
-          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-purple-500">
-            <p className="text-xs font-bold text-gray-500 uppercase">Ticket Médio</p>
+          {/* Métrica de Cobertura */}
+          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-indigo-500">
+            <p className="text-xs font-bold text-gray-500 uppercase">Cobertura (Cli. Únicos)</p>
             <p className="text-2xl font-bold text-gray-800">
-              {(data.totalRevenue / (data.totalOrders || 1)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+               {data.totalCoverage !== undefined ? data.totalCoverage : '-'}
             </p>
           </div>
           <div className="bg-white p-4 rounded-lg shadow border-l-4 border-orange-500">

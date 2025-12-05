@@ -31,6 +31,9 @@ export interface VisitRecord {
     dia_semana: string;
     periodicidade: string;
     data_visita: string;
+    // Novos campos de Inteligência de Cobertura
+    status_cobertura?: 'POSITIVADO' | 'PENDENTE';
+    valor_vendido_mes?: number;
 }
 
 export interface OpportunityRecord {
@@ -72,6 +75,7 @@ export interface FilterParams {
 export interface SalesSummary {
   totalRevenue: number;
   totalOrders: number;
+  totalCoverage?: number; // Clientes Únicos Atendidos
   averageTicket: number;
   topProduct: string;
   byCategory: { name: string; value: number }[];

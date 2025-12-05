@@ -172,7 +172,7 @@ const SQL_QUERIES = {
         DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1);
         DECLARE @FimMesAtual DATE = EOMONTH(@DataBase);
 
-        WITH DatasMes AS (
+        ;WITH DatasMes AS (
             SELECT @DataInicioMes AS DataVisita
             UNION ALL
             SELECT DATEADD(DAY, 1, DataVisita)
@@ -194,22 +194,23 @@ const SQL_QUERIES = {
             FROM DatasMes d
         ),
         VendasMes AS (
-            SELECT DISTINCT CODCET, SUM(VALLIQPDD) as TotalVendido
-            FROM flexx10071188.dbo.ibetpdd
-            WHERE DATEMSDOCPDD >= @InicioMesAtual AND DATEMSDOCPDD <= @FimMesAtual
-            AND INDSTUMVTPDD = 1 -- Venda
-            AND CODMTCEPG = @sellerId
-            GROUP BY CODCET
+            SELECT P.CODCET, SUM(I.VALTOTITEPDD) as TotalVendido
+            FROM flexx10071188.dbo.ibetpdd P
+            INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD
+            WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual
+            AND P.INDSTUMVTPDD = 1 -- Venda
+            AND P.CODMTCEPG = @sellerId
+            GROUP BY P.CODCET
         )
         SELECT DISTINCT
-            e.CODMTCEPGVDD AS 'CodVend',
-            epg.NOMEPG AS 'NomeVendedor',
-            a.CODCET AS 'CodCliente', 
-            d.NOMRAZSCLCET AS 'RazaoSocial', 
-            x.DataVisita AS 'DataVisita',
-            a.DESCCOVSTCET AS 'Periodicidade',
-            CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'StatusCobertura',
-            ISNULL(VM.TotalVendido, 0) AS 'ValorVendidoMes'
+            e.CODMTCEPGVDD AS 'cod_vend',
+            epg.NOMEPG AS 'nome_vendedor',
+            a.CODCET AS 'cod_cliente', 
+            d.NOMRAZSCLCET AS 'razao_social', 
+            x.DataVisita AS 'data_visita',
+            a.DESCCOVSTCET AS 'periodicidade',
+            CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura',
+            ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes'
         FROM flexx10071188.dbo.IBETVSTCET a
         INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana
         INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f 
@@ -316,7 +317,7 @@ async function executeToolCall(name, args) {
             
             // Cálculos para a IA
             const total = result.recordset.length;
-            const positivados = result.recordset.filter(r => r.StatusCobertura === 'POSITIVADO').length;
+            const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
 
             const summary = {
@@ -568,7 +569,7 @@ async function runChatAgent(userMessage, history = []) {
             if (toolResult && toolResult.frontend_data) {
                 // Preserva metadados de Cobertura/Visitas para o Frontend
                 const rows = toolResult.frontend_data;
-                const isVisit = rows[0]?.['DataVisita'] !== undefined;
+                const isVisit = rows[0]?.['data_visita'] !== undefined;
                 
                 dataForFrontend = { 
                     samples: rows,
@@ -620,8 +621,8 @@ app.post('/api/v1/chat', async (req, res) => {
             const rows = response.data.samples;
             
             // Lógica para diferenciar tipos de dados (Vendas vs Visitas vs Oportunidades)
-            // Se tiver 'DataVisita', é visita.
-            const isVisit = rows[0]?.['DataVisita'] !== undefined;
+            // Se tiver 'data_visita', é visita.
+            const isVisit = rows[0]?.['data_visita'] !== undefined;
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
 
             formattedData = {

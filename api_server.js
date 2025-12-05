@@ -52,6 +52,8 @@ FERRAMENTAS (TOOLS):
    - Use quando perguntarem "O que oferecer para o cliente X?", "O que ele parou de comprar?".
    - Identifica produtos que o cliente comprava mas não comprou este mês.
 3. **query_sales_data**: Para totais de vendas e performance.
+   - Use groupBy='product' para "Produtos mais vendidos".
+   - Use groupBy='product_group' para "Grupos mais vendidos".
 4. **get_sales_team**: Para descobrir IDs de vendedores.
 5. **get_customer_base**: Para buscar IDs de clientes.
 
@@ -134,8 +136,8 @@ const querySalesTool = {
       channel: { type: "STRING" },
       groupBy: { 
           type: "STRING", 
-          description: "Agrupar por: 'day', 'month', 'seller', 'supervisor', 'city', 'product_group', 'line', 'customer', 'origin'",
-          enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin"]
+          description: "Agrupar por: 'day', 'month', 'seller', 'supervisor', 'city', 'product_group', 'line', 'customer', 'origin', 'product', 'product_family'",
+          enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin", "product", "product_family"]
       }
     },
   },
@@ -226,9 +228,9 @@ const SQL_QUERIES = {
              AND C.INDSTUMVTPDD = 1
         )
         SELECT TOP 10 
-            P.CODCATITE as cod_produto, 
-            P.DESCATITE as descricao, 
-            G.DESGPOITE as grupo
+            CONCAT(P.CODCATITE, ' - ', P.DESCATITE) as descricao, 
+            CONCAT(G.CODGPOITE, ' - ', G.DESGPOITE) as grupo,
+            P.CODCATITE as cod_produto 
         FROM Historico H
         LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE
         INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE
@@ -280,7 +282,7 @@ async function executeToolCall(name, args) {
         // TOOL 2: CLIENTES
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
-            const result = await request.query(`SELECT TOP 10 CODCET as id, NOMRAZSCLCET as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
+            const result = await request.query(`SELECT TOP 10 CODCET as id, CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
             return result.recordset;
         }
 
@@ -433,13 +435,19 @@ async function executeToolCall(name, args) {
 
             if (args.groupBy) {
                 let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; 
-                if (args.groupBy === 'seller') dimension = "ibetcplepg.nomepg";
+                if (args.groupBy === 'seller') dimension = "CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg)";
                 if (args.groupBy === 'line') dimension = `(CASE 
                         WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
                         WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
                         ELSE IBETDOMLINNTE.DESLINNTE 
                     END)`;
-                if (args.groupBy === 'customer') dimension = "IBETCET.NOMRAZSCLCET";
+                if (args.groupBy === 'customer') dimension = "CONCAT(IBETCET.CODCET, ' - ', IBETCET.NOMRAZSCLCET)";
+                // Padrão COD - NOME para Produtos, Grupos e Familias
+                if (args.groupBy === 'product') dimension = "CONCAT(IBETCATITE.CODCATITE, ' - ', IBETCATITE.DESCATITE)";
+                if (args.groupBy === 'product_group') dimension = "CONCAT(IBETGPOITE.CODGPOITE, ' - ', IBETGPOITE.DESGPOITE)";
+                if (args.groupBy === 'product_family') dimension = "CONCAT(IBETFAMITE.CODFAMITE, ' - ', IBETFAMITE.DESFAMITE)";
+                if (args.groupBy === 'city') dimension = "IBETCDD.descdd";
+                if (args.groupBy === 'origin') dimension = "ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT')";
 
                 let joinExtra = "";
                 if (args.groupBy === 'seller') joinExtra = "INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG";
@@ -464,14 +472,15 @@ async function executeToolCall(name, args) {
                 let detailQuery = `
                     ${BASE_CTE}
                     SELECT TOP 50 
-                        ibetpdd.DATEMSDOCPDD AS 'Data', ibetcplepg.nomepg AS 'Nome Vendedor',
+                        ibetpdd.DATEMSDOCPDD AS 'Data', 
+                        CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg) AS 'Nome Vendedor',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido'
                     FROM pedidos_filtrados ibetpdd
                     ${ALL_JOINS}
                     INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
                 `;
                 if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
-                detailQuery += ` GROUP BY ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetcplepg.nomepg ORDER BY ibetpdd.DATEMSDOCPDD DESC`;
+                detailQuery += ` GROUP BY ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetcplepg.nomepg, ibetpdd.CODMTCEPG ORDER BY ibetpdd.DATEMSDOCPDD DESC`;
                 
                 const detailResult = await request.query(detailQuery);
                 frontendPayload = detailResult.recordset;

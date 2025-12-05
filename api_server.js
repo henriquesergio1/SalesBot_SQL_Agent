@@ -42,28 +42,24 @@ const getSystemInstruction = () => {
 Você é o "SalesBot", um analista de inteligência de negócios SQL Expert.
 HOJE É: ${today}.
 
-ESTRATÉGIA DE ANÁLISE (IMPORTANTE):
-1. **PARA TOTAIS E COMPARAÇÕES (BIG DATA)**: 
+REGRAS DE OURO (ANTI-ALUCINAÇÃO):
+1. **NUNCA INVENTE NOMES**. Se buscar um ID (Ex: 502) e o banco não retornar nada, diga "Não encontrei funcionário com ID 502". Não chute.
+2. **"SETOR" É O MESMO QUE "ID DO VENDEDOR"**. (Ex: "Setor 502" = sellerId: 502).
+3. **"QUAIS CLIENTES?"**: Use sempre 'groupBy: "customer"' na tool query_sales_data.
+
+ESTRATÉGIA DE ANÁLISE:
+1. **PARA TOTAIS E LISTAS**: 
    - SEMPRE use o parâmetro 'groupBy' na tool 'query_sales_data'.
-   - Ex: "Vendas por vendedor em 2023" -> use { groupBy: 'seller', startDate: '2023-01-01', ... }
-   - Isso permite processar milhões de linhas instantaneamente.
+   - Ex: "Quais clientes compraram?" -> { groupBy: 'customer', ... }
+   - Ex: "Vendas por vendedor" -> { groupBy: 'seller', ... }
 
-2. **COMPARAÇÃO DE PERÍODOS (YoY/MoM)**:
-   - Se o usuário pedir "Compare 2023 com 2024", chame a tool DUAS vezes.
-   - Chamada 1: totais de 2023.
-   - Chamada 2: totais de 2024.
-   - Depois calcule a diferença percentual na sua resposta textual.
-
-TERMINOLOGIA:
-- **"SETOR"** = **ID DO VENDEDOR** (Ex: 502).
-- **"ROTA"** = Localização/Cidade.
+2. **COMPARAÇÃO DE PERÍODOS**:
+   - Compare chamando a tool duas vezes (uma para cada ano/mês) e calcule a diferença.
 
 TOOLS:
-1. **get_sales_team**: Identificar IDs de funcionários.
+1. **get_sales_team**: Use para descobrir quem é o Vendedor 105, 502, etc. (Busca exata no banco).
 2. **get_customer_base**: Buscar dados cadastrais de clientes.
-3. **query_sales_data**: Ferramenta Principal.
-   - Use 'groupBy' para relatórios (month, seller, supervisor, city, product_group).
-   - Deixe 'groupBy' vazio APENAS se precisar listar pedidos individuais (limitado a 50 linhas).
+3. **query_sales_data**: Ferramenta Principal de Vendas.
 `;
 };
 
@@ -73,7 +69,7 @@ TOOLS:
 
 const salesTeamTool = {
     name: "get_sales_team",
-    description: "Consulta funcionários (Vendedores/Setores, Supervisores). Use para descobrir IDs.",
+    description: "Consulta funcionários (Vendedores/Setores, Supervisores). Use para validar IDs antes de buscar vendas.",
     parameters: {
         type: "OBJECT",
         properties: {
@@ -99,20 +95,20 @@ const customerBaseTool = {
 
 const querySalesTool = {
   name: "query_sales_data",
-  description: "Busca vendas. Use 'groupBy' para totais agregados (Rápido) ou deixe vazio para detalhes (Lento).",
+  description: "Busca vendas. Use 'groupBy' para listas agregadas (Ex: Top Clientes, Vendas por Mês).",
   parameters: {
     type: "OBJECT",
     properties: {
       startDate: { type: "STRING", description: "YYYY-MM-DD" },
       endDate: { type: "STRING", description: "YYYY-MM-DD" },
-      sellerId: { type: "INTEGER" },
+      sellerId: { type: "INTEGER", description: "ID do Vendedor (Setor)" },
       customerId: { type: "INTEGER" },
       status: { type: "STRING", description: "'VENDA' ou 'DEVOLUÇÃO'" },
       generalSearch: { type: "STRING" },
       groupBy: { 
           type: "STRING", 
-          description: "Agrupar por: 'month', 'seller', 'supervisor', 'city', 'product_group', 'line'",
-          enum: ["month", "seller", "supervisor", "city", "product_group", "line"]
+          description: "Agrupar por: 'month', 'seller', 'supervisor', 'city', 'product_group', 'line', 'customer'",
+          enum: ["month", "seller", "supervisor", "city", "product_group", "line", "customer"]
       }
     },
   },
@@ -121,11 +117,12 @@ const querySalesTool = {
 const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySalesTool] }];
 
 // ==================================================================================
-// 3. QUERIES SQL
+// 3. QUERIES SQL BASE
 // ==================================================================================
 
 const SQL_QUERIES = {
-    SALES_TEAM: `
+    // Base da query de equipe (Filtros adicionados dinamicamente)
+    SALES_TEAM_BASE: `
         SELECT DISTINCT 
             V.CODMTCEPG as 'id',
             V.nomepg as 'nome',
@@ -180,18 +177,34 @@ async function executeToolCall(name, args) {
         pool = await sql.connect(sqlConfig);
         const request = pool.request();
 
+        // ---------------------------------------------------------
+        // TOOL 1: EQUIPE DE VENDAS (Correção: Filtro SQL Estrito)
+        // ---------------------------------------------------------
         if (name === 'get_sales_team') {
-            const result = await request.query(SQL_QUERIES.SALES_TEAM);
-            let team = result.recordset;
-            if (args.id) team = team.filter(t => t.id == args.id);
+            let query = SQL_QUERIES.SALES_TEAM_BASE;
+            
+            // Busca Exata por ID (Evita Alucinação)
+            if (args.id) {
+                request.input('id', sql.Int, args.id);
+                query += " AND V.CODMTCEPG = @id";
+            } 
+            // Busca por Nome (LIKE)
             else if (args.searchName) {
-                const term = args.searchName.toLowerCase();
-                team = team.filter(t => t.nome.toLowerCase().includes(term));
+                request.input('searchName', sql.VarChar, `%${args.searchName}%`);
+                query += " AND V.nomepg LIKE @searchName";
             }
-            if (team.length === 0) return { message: "Nenhum funcionário encontrado." };
-            return team.slice(0, 15);
+
+            const result = await request.query(query);
+            
+            if (result.recordset.length === 0) {
+                return { message: "Nenhum funcionário encontrado com esses critérios no banco de dados." };
+            }
+            return result.recordset.slice(0, 20);
         }
 
+        // ---------------------------------------------------------
+        // TOOL 2: CLIENTES
+        // ---------------------------------------------------------
         if (name === 'get_customer_base') {
             if (!args.searchTerm) return { error: "Falta searchTerm" };
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
@@ -199,6 +212,9 @@ async function executeToolCall(name, args) {
             return result.recordset;
         }
 
+        // ---------------------------------------------------------
+        // TOOL 3: VENDAS (Principal)
+        // ---------------------------------------------------------
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -208,6 +224,10 @@ async function executeToolCall(name, args) {
 
             request.input('startDate', sql.Date, args.startDate || defaultStart);
             request.input('endDate', sql.Date, args.endDate || defaultEnd);
+
+            // Filtros Opcionais
+            if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
+            if (args.customerId) request.input('customerId', sql.Int, args.customerId);
 
             // ==================================================================
             // MODO ANALÍTICO (GROUP BY) - ALTA PERFORMANCE
@@ -242,12 +262,16 @@ async function executeToolCall(name, args) {
                          dimensionColumn = "IBETDOMLINNTE.DESLINNTE";
                          dimensionLabel = 'Linha';
                          break;
+                    case 'customer':
+                         dimensionColumn = "IBETCET.NOMRAZSCLCET";
+                         dimensionLabel = 'Cliente';
+                         break;
                     default:
                         return { error: `Agrupamento '${args.groupBy}' não suportado.` };
                 }
 
                 // Query Agregada Otimizada
-                const aggQuery = `
+                let aggQuery = `
                     ${SQL_QUERIES.BASE_CTE}
                     SELECT TOP 100
                         ${dimensionColumn} as 'Label',
@@ -266,7 +290,20 @@ async function executeToolCall(name, args) {
                     LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
                     LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
                     LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
-                    
+                `;
+
+                // Injeta filtros SQL opcionais na cláusula WHERE (após os joins, para simplificar)
+                // Nota: O ideal seria injetar na CTE, mas as colunas de Vendedor/Cliente estão fora da CTE base.
+                // Filtramos na query principal.
+                let whereConditions = [];
+                if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
+                if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
+                
+                if (whereConditions.length > 0) {
+                    aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+                }
+
+                aggQuery += `
                     GROUP BY ${dimensionColumn}
                     ORDER BY 'Valor' DESC
                 `;
@@ -274,7 +311,7 @@ async function executeToolCall(name, args) {
                 const result = await request.query(aggQuery);
                 return { 
                     summary: {
-                        tipo_relatorio: `Vendas por ${dimensionLabel}`,
+                        tipo_relatorio: `Vendas Agrupadas por ${dimensionLabel}`,
                         registros: result.recordset
                     }
                 };
@@ -283,9 +320,9 @@ async function executeToolCall(name, args) {
             // ==================================================================
             // MODO DETALHADO (SELECT *) - APENAS SE GROUPBY FOR VAZIO
             // ==================================================================
-            const detailQuery = `
+            let detailQuery = `
                 ${SQL_QUERIES.BASE_CTE}
-                SELECT TOP 500 
+                SELECT TOP 200 
                     ibetpdd.DATEMSDOCPDD AS 'Data',
                     ibetpdd.CODPDD AS 'Pedido',
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
@@ -300,7 +337,18 @@ async function executeToolCall(name, args) {
                 INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
-                
+            `;
+
+             // Filtros Adicionais para Detalhes
+            let detailWhere = [];
+            if (args.sellerId) detailWhere.push("ibetpdd.CODMTCEPG = @sellerId");
+            if (args.customerId) detailWhere.push("ibetpdd.CODCET = @customerId");
+
+            if (detailWhere.length > 0) {
+                 detailQuery += ` WHERE ${detailWhere.join(' AND ')}`;
+            }
+
+            detailQuery += `
                 GROUP BY 
                     ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, IBETITEPDD.QTDITEPDD,
                     IBETCET.NOMRAZSCLCET, ibetcplepg.nomepg, IBETCATITE.DESCATITE
@@ -310,8 +358,7 @@ async function executeToolCall(name, args) {
             const result = await request.query(detailQuery);
             let data = result.recordset;
 
-            // Filtros JavaScript (apenas para refinamento final)
-            if (args.sellerId) data = data.filter(r => r['Vendedor'] == args.sellerId); // Ajustar se necessário, mas no detalhado o SQL já fez o grosso
+            // Filtros JavaScript (apenas texto geral)
             if (args.generalSearch) {
                 const term = args.generalSearch.toLowerCase();
                 data = data.filter(r => Object.values(r).join(' ').toLowerCase().includes(term));
@@ -327,7 +374,7 @@ async function executeToolCall(name, args) {
 }
 
 function summarizeSalesData(data) {
-    if (!data || data.length === 0) return { message: "Nenhum dado encontrado." };
+    if (!data || data.length === 0) return { message: "Nenhum registro de venda encontrado com esses filtros." };
 
     const totalLiquido = data.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0);
     const totalQtd = data.reduce((acc, r) => acc + (r['Quantidade'] || 0), 0);

@@ -35,8 +35,8 @@ services:
       - DB_USER=SQL10071188
       - DB_PASS=SQL2020/R@1nh@
       - DB_NAME=flexx10071188
-      # --- COLE SUA CHAVE ABAIXO E SALVE O ARQUIVO ---
-      - API_KEY=AIzaSyD3CWke74l_fRJ18gmug1Himb4y7Sf5if8
+      # --- GERE UMA NOVA CHAVE NO GOOGLE AI STUDIO E COLE ABAIXO ---
+      - API_KEY=COLE_SUA_NOVA_CHAVE_AQUI
       - SECRET_KEY=minha-senha-secreta-api
     depends_on:
       - sql-server

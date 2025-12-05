@@ -1,18 +1,14 @@
 
 import { SalesSummary, ChatMessage } from "../types";
 
-// Função para pegar URL da API
+// Função para pegar URL da API Automaticamente
 const getApiUrl = () => {
-  const storedUrl = localStorage.getItem('salesbot_api_url');
-  if (storedUrl) return storedUrl;
-
-  // @ts-ignore
-  const envUrl = import.meta.env?.VITE_API_URL;
-  if (envUrl) {
-    return envUrl.replace('/query', '/chat');
-  }
-
-  return "http://localhost:8085/api/v1/chat";
+  // Estratégia Inteligente: Pega o mesmo IP/Domínio que está no navegador
+  // e apenas troca a porta para 8085 (Padrão do seu Docker)
+  const hostname = window.location.hostname;
+  const protocol = window.location.protocol;
+  
+  return `${protocol}//${hostname}:8085/api/v1/chat`;
 };
 
 export const checkBackendHealth = async () => {
@@ -47,7 +43,7 @@ export const sendMessageToAgent = async (
 ): Promise<{ text: string; data?: SalesSummary }> => {
   
   const API_URL = getApiUrl();
-  console.log("Enviando mensagem para API Docker:", API_URL);
+  console.log("Enviando mensagem para API Docker (Auto-Detected):", API_URL);
 
   // Formata o histórico corretamente antes de enviar
   const formattedHistory = formatHistoryForGemini(history);
@@ -80,7 +76,7 @@ export const sendMessageToAgent = async (
     console.error("Erro ao comunicar com Backend:", error);
     // Mensagem amigável para o chat
     return { 
-      text: `🔴 **ERRO DE CONEXÃO**: ${error.message}. \n\nDICA: Verifique se o Docker está rodando e se o IP nas configurações está correto.` 
+      text: `🔴 **ERRO DE CONEXÃO**: ${error.message}. \n\nDICA: O sistema tentou conectar em ${API_URL}. Verifique se o container 'salesbot-api' está rodando.` 
     };
   }
 };

@@ -8,7 +8,7 @@ interface IntegrationModalProps {
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
-  const [sessionName, setSessionName] = useState('vendas_bot');
+  const [sessionName, setSessionName] = useState('vendas01');
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -17,6 +17,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   if (!isOpen) return null;
 
+  const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      // Remove espaços e caracteres especiais, força minúsculo
+      const cleanValue = e.target.value.replace(/[^a-z0-9]/g, '').toLowerCase();
+      setSessionName(cleanValue);
+  };
+
   const generateQrCode = async () => {
     setIsLoading(true);
     setErrorMsg(null);
@@ -24,17 +30,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     try {
       // 1. Tenta criar a Instância
+      // Nota: Evolution API retorna erro se já existe, mas tudo bem, tentamos conectar logo em seguida
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
         body: JSON.stringify({ instanceName: sessionName, qrcode: true })
       });
 
+      // Se falhar mas não for erro de autenticação, assume que pode já existir e segue
       if (!createResponse.ok && createResponse.status !== 403) {
-         const errData = await createResponse.json().catch(() => ({}));
-         if (!JSON.stringify(errData).includes('already exists')) {
-             throw new Error(`Erro ao criar instância. Verifique se a porta 8082 está correta.`);
-         }
+         // Apenas loga, não trava, pois o connect resolve se já existir
+         console.warn("Tentativa de criação retornou status:", createResponse.status);
       }
 
       // 2. Busca o QR Code
@@ -43,7 +49,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         headers: { 'apikey': secretKey }
       });
 
-      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code.");
+      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code. Verifique a URL e a Chave.");
 
       const data = await connectResponse.json();
       const qrCode = data.base64 || data.qrcode;
@@ -51,9 +57,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (qrCode) {
         setQrCodeData(qrCode);
       } else if (data.instance?.status === 'open') {
-        setErrorMsg("Esta sessão já está conectada no WhatsApp!");
+        setErrorMsg("✅ Esta sessão já está CONECTADA no WhatsApp!");
       } else {
-        throw new Error("QR Code não retornado. Tente novamente.");
+        throw new Error("QR Code não retornado. Aguarde alguns segundos e tente novamente.");
       }
 
     } catch (err: any) {
@@ -83,7 +89,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             
             <div className="bg-blue-50 border border-blue-200 p-3 rounded text-xs text-blue-700">
                 <i className="fas fa-network-wired mr-1"></i>
-                API conectada automaticamente em: <strong>http://{window.location.hostname}:8085</strong>
+                API Inteligente conectada automaticamente em: <strong>http://{window.location.hostname}:8085</strong>
             </div>
 
             <div>
@@ -95,17 +101,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     className="w-full border rounded p-2 text-sm mb-2" 
                 />
 
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão (Sem espaços)</label>
                 <input 
                     type="text" 
                     value={sessionName}
-                    onChange={(e) => setSessionName(e.target.value)}
-                    className="w-full border rounded p-2 text-sm" 
+                    onChange={handleSessionNameChange}
+                    placeholder="ex: vendas01"
+                    className="w-full border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
                 />
+                <p className="text-[10px] text-gray-400 mt-1">Apenas letras minúsculas e números.</p>
             </div>
             
             {errorMsg && (
-                <div className="p-3 bg-red-50 text-red-600 text-xs rounded border border-red-200">
+                <div className={`p-3 text-xs rounded border ${errorMsg.includes('✅') ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
                    {errorMsg}
                 </div>
             )}

@@ -48,29 +48,27 @@ Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e **COBERTURA (POSITIVAÇÃ
 DEFINIÇÕES:
 - **COBERTURA**: Número de clientes únicos que compraram. Se vendi 10 vezes para o mesmo cliente, Cobertura = 1.
 - **POSITIVADO**: Cliente que já comprou no mês atual.
-- **PENDENTE**: Cliente que está na rota mas ainda não comprou no mês.
+- **PENDENTE**: Cliente que está na rota/base mas ainda não comprou no mês.
 
 REGRAS VISUAIS:
 1. **SEMPRE** mostre o CÓDIGO/ID antes do nome (Ex: "101 - Mercado X").
 2. **LISTAGEM**: Se a ferramenta retornar uma lista de itens (clientes, produtos, visitas), VOCÊ DEVE LISTAR ELES NO CHAT. Use bullet points (*).
-   - Exemplo Rota:
-     * 101 - Padaria A (PENDENTE)
-     * 102 - Mercado B (POSITIVADO)
+   - Se a lista for grande, liste os primeiros 20 e avise "e mais X...".
 
 FERRAMENTAS (TOOLS):
-1. **get_scheduled_visits**: Retorna a Rota e o STATUS DE COBERTURA.
-   - Use para: "Minha rota de hoje", "Quem falta positivar na rota?", "Quantos da rota já compraram?".
-   - O retorno conterá uma lista de texto simplificada para você exibir no chat.
-2. **query_sales_data**: Para totais de vendas e COBERTURA GERAL.
+1. **get_scheduled_visits**: 
+   - Use 'scope: day' para "Minha rota de hoje".
+   - Use 'scope: month' para "Quantos clientes tenho na base?", "Quantos faltam cobrir este mês?", "Quem ainda não positivou no mês?".
+   - O retorno conterá a lista de clientes PENDENTES para você cobrar.
+2. **query_sales_data**: Para totais de vendas e COBERTURA REALIZADA.
    - Retorna o campo 'totalCoverage' (Clientes Únicos).
    - Use para: "Qual minha cobertura total este mês?", "Vendas totais".
-3. **analyze_client_gap**: Oportunidades de produtos não comprados.
+3. **analyze_client_gap**: Oportunidades de produtos não comprados (Gap Analysis).
 4. **get_sales_team** e **get_customer_base**: Para buscar IDs.
 
 COMPORTAMENTO:
-- Ao analisar a rota, destaque quantos clientes já foram positivados e quantos faltam.
+- Ao analisar "Faltam Cobrir", use 'get_scheduled_visits' com scope='month'. Ele vai te dar o total da base prevista vs realizado.
 - Liste os clientes pendentes para ajudar o vendedor.
-- Se a lista for muito longa, mostre os primeiros 10 e diga "e mais X clientes...".
 `;
 };
 
@@ -104,12 +102,17 @@ const customerBaseTool = {
 
 const visitsTool = {
     name: "get_scheduled_visits",
-    description: "Retorna a ROTA de visitas programada e o STATUS DE COBERTURA (Se já comprou no mês).",
+    description: "Retorna a ROTA de visitas (Dia) ou a BASE TOTAL DO MÊS (Mês) com status de cobertura.",
     parameters: {
         type: "OBJECT",
         properties: {
             sellerId: { type: "INTEGER", description: "ID do Vendedor (Setor)" },
-            date: { type: "STRING", description: "YYYY-MM-DD (Padrão: Hoje)" }
+            date: { type: "STRING", description: "YYYY-MM-DD (Padrão: Hoje)" },
+            scope: { 
+                type: "STRING", 
+                enum: ["day", "month"], 
+                description: "'day' para rota do dia, 'month' para análise de cobertura mensal (quanto falta cobrir)." 
+            }
         },
         required: ["sellerId"]
     }
@@ -212,7 +215,8 @@ const SQL_QUERIES = {
             epg.NOMEPG AS 'nome_vendedor',
             a.CODCET AS 'cod_cliente', 
             d.NOMRAZSCLCET AS 'razao_social', 
-            x.DataVisita AS 'data_visita',
+            -- Se for escopo mensal, a data exata importa menos, queremos a lista única
+            MAX(x.DataVisita) AS 'data_visita_ref', 
             a.DESCCOVSTCET AS 'periodicidade',
             CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura',
             ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes'
@@ -229,9 +233,11 @@ const SQL_QUERIES = {
             ON epg.CODMTCEPG = e.CODMTCEPGVDD
         LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET
         WHERE d.TPOSTUCET = 'A' 
-          AND x.DataVisita = @targetDate
           AND e.CODMTCEPGVDD = @sellerId
-        ORDER BY x.DataVisita
+          -- FILTRO DINÂMICO APLICADO NO CÓDIGO JS (Dia vs Mês)
+          -- AND x.DataVisita = @targetDate 
+        GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido
+        ORDER BY status_cobertura, a.CODCET
         OPTION (MAXRECURSION 1000);
     `,
     // Query de Oportunidade
@@ -241,7 +247,7 @@ const SQL_QUERIES = {
              FROM flexx10071188.dbo.ibetpdd C
              INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD
              WHERE C.CODCET = @customerId
-             AND C.DATEMSDOCPDD >= DATEADD(MONTH, -4, GETDATE())
+             AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) -- AJUSTADO PARA 3 MESES
              AND C.INDSTUMVTPDD = 1 -- Apenas Vendas
         ),
         CompradoMesAtual AS (
@@ -312,43 +318,62 @@ async function executeToolCall(name, args) {
             return result.recordset;
         }
 
-        // TOOL 4: ROTA DE VISITAS (COM COBERTURA)
+        // TOOL 4: ROTA DE VISITAS (COM COBERTURA E ESCOPO MENSAL)
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
+            const scope = args.scope || 'day'; // 'day' or 'month'
+
             request.input('targetDate', sql.Date, date);
             request.input('sellerId', sql.Int, args.sellerId);
             
-            const result = await request.query(SQL_QUERIES.VISITS_QUERY);
+            // Lógica de Filtro Dinâmico SQL
+            let finalQuery = SQL_QUERIES.VISITS_QUERY;
+            
+            // Se o escopo for 'day', filtramos pela data exata
+            if (scope === 'day') {
+                // A query base já tem WHERE ..., precisamos adicionar o AND x.DataVisita
+                // Vamos usar replace para injetar o filtro, já que a query é fixa
+                finalQuery = finalQuery.replace(
+                    "-- AND x.DataVisita = @targetDate", 
+                    "AND x.DataVisita = @targetDate"
+                );
+            } else {
+                // Se for 'month', NÃO filtramos por dia específico, trazendo a base toda do período
+                // A query já está preparada para trazer o mês todo nas CTEs, só o filtro final que removemos
+            }
+
+            const result = await request.query(finalQuery);
             
             // Cálculos para a IA
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
             
-            // CRITICAL: Lista simplificada para o Chat do WhatsApp
-            // A IA precisa "ler" essa lista para poder escrever no chat.
-            const listaSimples = result.recordset.slice(0, 30).map(r => 
-                `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`
-            );
+            // CRITICAL: Lista para o Chat do WhatsApp
+            // Aumentamos o limite para 50 para trazer mais clientes na lista de "faltam cobrir"
+            const listaSimples = result.recordset
+                .filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true) // Se for mensal, foca nos pendentes
+                .slice(0, 50)
+                .map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
 
-            if (result.recordset.length > 30) {
-                listaSimples.push(`... e mais ${result.recordset.length - 30} clientes.`);
+            if (result.recordset.length > 50) {
+                listaSimples.push(`... e mais ${result.recordset.length - 50} clientes.`);
             }
 
             const summary = {
-                data_rota: date,
-                total_clientes_rota: total,
+                escopo_analise: scope === 'day' ? `Rota do Dia ${date}` : `Base Prevista Mês Inteiro`,
+                total_clientes_base: total,
                 ja_compraram_mes: positivados,
                 pendentes_cobertura: pendentes,
                 // Injetamos a lista aqui para a IA ler
-                LISTA_DETALHADA_PARA_CHAT: listaSimples,
-                status_geral: `De ${total} clientes na rota, ${positivados} já foram cobertos no mês.`
+                LISTA_CLIENTES: listaSimples,
+                status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.`
             };
 
             return {
                 ai_response: summary, 
-                frontend_data: result.recordset,
-                debug_meta: { period: date, filters: [`Vendedor ${args.sellerId}`], sqlLogic: 'Rota + Cobertura' }
+                frontend_data: result.recordset, // Frontend sempre recebe tudo para tabela
+                debug_meta: { period: scope === 'day' ? date : 'Mês Atual', filters: [`Vendedor ${args.sellerId}`], sqlLogic: scope === 'month' ? 'Base Mensal' : 'Rota Diária' }
             };
         }
 
@@ -366,7 +391,7 @@ async function executeToolCall(name, args) {
                     lista_produtos_sugeridos: listaProdutos 
                 },
                 frontend_data: result.recordset,
-                debug_meta: { period: 'Últimos 4 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' }
+                debug_meta: { period: 'Últimos 3 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' }
             };
         }
 
@@ -529,8 +554,9 @@ async function executeToolCall(name, args) {
                 frontendPayload = aggResult.recordset;
                 
                 // CRITICAL: Se for top list (clientes, produtos), envia lista simples pra IA também
+                // Aumentado slice para 50 para satisfazer pedido de listas maiores
                 if (aggResult.recordset.length > 0) {
-                     aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 15).map(r => 
+                     aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => 
                         `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`
                      );
                 }
@@ -598,7 +624,7 @@ async function runChatAgent(userMessage, history = []) {
             if (toolResult && toolResult.frontend_data) {
                 // Preserva metadados de Cobertura/Visitas para o Frontend
                 const rows = toolResult.frontend_data;
-                const isVisit = rows[0]?.['data_visita'] !== undefined;
+                const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
                 
                 dataForFrontend = { 
                     samples: rows,
@@ -650,8 +676,8 @@ app.post('/api/v1/chat', async (req, res) => {
             const rows = response.data.samples;
             
             // Lógica para diferenciar tipos de dados (Vendas vs Visitas vs Oportunidades)
-            // Se tiver 'data_visita', é visita.
-            const isVisit = rows[0]?.['data_visita'] !== undefined;
+            // Se tiver 'data_visita' ou 'data_visita_ref', é visita.
+            const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
 
             formattedData = {

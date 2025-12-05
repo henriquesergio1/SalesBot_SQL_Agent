@@ -48,15 +48,14 @@ REGRAS DE OURO (ANTI-ALUCINAÇÃO):
 3. **"QUAIS CLIENTES?"**: Use sempre 'groupBy: "customer"' na tool query_sales_data.
 4. **"DIA A DIA"**: Use 'groupBy: "day"'.
 
-DEFINIÇÃO DE VALORES:
-- O sistema retorna **Valor Bruto** (Total da Venda) e **Valor Líquido** (Menos impostos).
-- **SEMPRE CITE O VALOR BRUTO** a menos que o usuário peça especificamente o líquido. O time comercial usa o Bruto.
+DEFINIÇÃO DE VALORES (IMPORTANTE):
+- O sistema trabalha com **Valor Líquido** (Valor dos Itens - Impostos ST e IPI).
+- **SEMPRE CITE O VALOR LÍQUIDO** como o total de vendas, a menos que o usuário peça explicitamente o bruto.
 
 ESTRATÉGIA DE ANÁLISE:
 1. **PARA TOTAIS E LISTAS**: 
    - SEMPRE use o parâmetro 'groupBy' na tool 'query_sales_data' se o usuário pedir listas ou evolução (dia a dia).
-   - Confie no campo 'ValorBruto' para responder quanto vendeu.
-
+   
 2. **COMPARAÇÃO DE PERÍODOS**:
    - Compare chamando a tool duas vezes (uma para cada período) e calcule a diferença mentalmente.
 
@@ -213,7 +212,7 @@ async function executeToolCall(name, args) {
         }
 
         // ---------------------------------------------------------
-        // TOOL 3: VENDAS (Principal - CORRIGIDA PARA TOTAIS EXATOS BRUTOS)
+        // TOOL 3: VENDAS (Principal - AGORA PRIORIZANDO LÍQUIDO)
         // ---------------------------------------------------------
         if (name === 'query_sales_data') {
             const now = new Date();
@@ -234,8 +233,7 @@ async function executeToolCall(name, args) {
             if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
             if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
             
-            // --- QUERY DE TOTALIZAÇÃO ---
-            // Alterado para retornar Valor Bruto como padrão (VALTOTITEPDD)
+            // --- QUERY DE TOTALIZAÇÃO (LÍQUIDO) ---
             let totalQuery = `
                 ${SQL_QUERIES.BASE_CTE}
                 SELECT 
@@ -255,7 +253,7 @@ async function executeToolCall(name, args) {
             const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
 
 
-            // --- SE HOUVER GROUP BY (MODO ANALÍTICO) ---
+            // --- SE HOUVER GROUP BY (MODO ANALÍTICO - LÍQUIDO) ---
             if (args.groupBy) {
                 let dimensionColumn = '';
                 switch(args.groupBy) {
@@ -270,11 +268,12 @@ async function executeToolCall(name, args) {
                     default: return { error: `Agrupamento não suportado.` };
                 }
 
+                // Importante: Adicionados LEFT JOINs de IPI e ST aqui também para calcular o Líquido no Group By
                 let aggQuery = `
                     ${SQL_QUERIES.BASE_CTE}
                     SELECT TOP 100
                         ${dimensionColumn} as 'Label',
-                        SUM(IBETITEPDD.VALTOTITEPDD) AS 'ValorBruto'
+                        SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido'
                     FROM pedidos_filtrados ibetpdd
                     INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
                     INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
@@ -286,17 +285,20 @@ async function executeToolCall(name, args) {
                     LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
                     LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
                     LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
+                    
+                    LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                    LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
                 `;
                 if (whereConditions.length > 0) aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
-                aggQuery += ` GROUP BY ${dimensionColumn} ORDER BY 'ValorBruto' DESC`;
+                aggQuery += ` GROUP BY ${dimensionColumn} ORDER BY 'ValorLiquido' DESC`;
 
                 const result = await request.query(aggQuery);
                 return { 
                     summary: {
-                        total_calculado_bruto: totalBruto,
-                        total_calculado_liquido: totalLiquido,
+                        total_calculado_liquido: totalLiquido, // O principal agora é o líquido
+                        total_bruto_referencia: totalBruto,
                         qtd_pedidos: qtdReal,
-                        tipo_relatorio: `Agrupado por ${args.groupBy}`,
+                        tipo_relatorio: `Agrupado por ${args.groupBy} (Valores Líquidos)`,
                         registros: result.recordset
                     }
                 };
@@ -311,6 +313,7 @@ async function executeToolCall(name, args) {
                     ibetpdd.DATEMSDOCPDD AS 'Data',
                     ibetpdd.CODPDD AS 'Pedido',
                     SUM(IBETITEPDD.VALTOTITEPDD) AS 'Valor Bruto',
+                    SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
                     IBETITEPDD.QTDITEPDD AS 'Quantidade',
                     IBETCET.NOMRAZSCLCET AS 'Razao Social',
                     ibetcplepg.nomepg AS 'Nome Vendedor',
@@ -320,6 +323,8 @@ async function executeToolCall(name, args) {
                 INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
                 INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
                 INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
             `;
 
             if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
@@ -336,10 +341,10 @@ async function executeToolCall(name, args) {
             // Retorna o Total Calculado via SQL (Exato) + Amostra de 50 registros
             return {
                 summary: {
-                    total_vendas_R$: totalBruto, // Prioridade para o Bruto
-                    valor_liquido_auxiliar: totalLiquido,
+                    total_vendas_R$: totalLiquido, // <--- MUDANÇA: A IA recebe o Líquido como principal
+                    valor_bruto_auxiliar: totalBruto,
                     total_itens: qtdReal,
-                    nota: "Total Bruto calculado no servidor SQL."
+                    nota: "Valores LÍQUIDOS calculados no servidor SQL."
                 },
                 llm_sample: data.slice(0, 5), 
                 full_data_frontend: data 
@@ -442,13 +447,14 @@ app.post('/api/v1/chat', async (req, res) => {
 function formatForReact(rows) {
     if (!rows) return null;
     return {
-        totalRevenue: rows.reduce((acc, r) => acc + (r['Valor Bruto'] || 0), 0),
+        // MUDANÇA: Frontend agora soma o Valor Líquido para exibir no Dashboard
+        totalRevenue: rows.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0),
         totalOrders: rows.length,
         averageTicket: 0,
         topProduct: rows[0]?.['Item Descrição'] || 'N/A',
         byCategory: [],
         recentTransactions: rows.map((r, i) => ({
-            id: i, date: r['Data'], total: r['Valor Bruto'], seller: r['Nome Vendedor'], product: r['Item Descrição']
+            id: i, date: r['Data'], total: r['Valor Liquido'], seller: r['Nome Vendedor'], product: r['Item Descrição']
         }))
     };
 }

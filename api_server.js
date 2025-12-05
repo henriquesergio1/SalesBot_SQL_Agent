@@ -177,7 +177,7 @@ async function executeToolCall(name, args) {
             return result.recordset;
         }
 
-        // TOOL 3: VENDAS (OTIMIZADO)
+        // TOOL 3: VENDAS (OTIMIZADO & CORRIGIDO DUPLICAÇÃO)
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -191,7 +191,7 @@ async function executeToolCall(name, args) {
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
 
-            // LIMPEZA DE INPUT DA LINHA (Remove a palavra 'LINHA' se a IA mandar sujo)
+            // LIMPEZA DE INPUT DA LINHA
             if (args.line) {
                 const cleanLine = args.line.toUpperCase().replace('LINHA', '').trim();
                 request.input('line', sql.VarChar, `%${cleanLine}%`);
@@ -205,10 +205,29 @@ async function executeToolCall(name, args) {
             if (args.generalSearch) request.input('generalSearch', sql.VarChar, `%${args.generalSearch}%`);
 
             let whereConditions = [];
-            if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
-            if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
+            // Arrays para debug
+            let debugFilters = [];
 
-            // Lógica CASE WHEN Robusta
+            if (args.sellerId) { whereConditions.push("ibetpdd.CODMTCEPG = @sellerId"); debugFilters.push(`Vendedor: ${args.sellerId}`); }
+            if (args.customerId) { whereConditions.push("ibetpdd.CODCET = @customerId"); debugFilters.push(`Cliente: ${args.customerId}`); }
+
+            // Dynamic Joins - Só adiciona se o filtro for usado para evitar duplicação (Cartesian Product)
+            let dynamicJoins = "";
+            let usesLine = false;
+
+            if (args.line || args.groupBy === 'line') {
+                usesLine = true;
+                dynamicJoins += " LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE ";
+            }
+            if (args.origin || args.groupBy === 'origin') {
+                dynamicJoins += " LEFT JOIN flexx10071188.dbo.IBETDOMORIPDDAUT IBETDOMORIPDDAUT ON ibetpdd.CODORIPDD = IBETDOMORIPDDAUT.codoripdd ";
+            }
+            if (args.city || args.groupBy === 'city') {
+                dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET ";
+                dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD ";
+            }
+
+            // Filtros que dependem dos Joins Dinâmicos ou Comuns
             if (args.line) {
                 whereConditions.push(`
                     (CASE 
@@ -217,18 +236,22 @@ async function executeToolCall(name, args) {
                         ELSE IBETDOMLINNTE.DESLINNTE 
                     END) LIKE @line
                 `);
+                debugFilters.push(`Linha: ${args.line}`);
             }
 
-            if (args.origin) whereConditions.push(`ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT') LIKE @origin`);
-            if (args.city) whereConditions.push("IBETCDD.descdd LIKE @city");
-            if (args.productGroup) whereConditions.push("IBETGPOITE.DESGPOITE LIKE @productGroup");
-            if (args.productFamily) whereConditions.push("IBETFAMITE.DESFAMITE LIKE @productFamily");
-            if (args.channel) whereConditions.push("IBETFAD.DESFAD LIKE @channel");
+            if (args.origin) { whereConditions.push(`ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT') LIKE @origin`); debugFilters.push(`Origem: ${args.origin}`); }
+            if (args.city) { whereConditions.push("IBETCDD.descdd LIKE @city"); debugFilters.push(`Cidade: ${args.city}`); }
+            if (args.productGroup) { whereConditions.push("IBETGPOITE.DESGPOITE LIKE @productGroup"); debugFilters.push(`Grupo: ${args.productGroup}`); }
+            if (args.productFamily) { whereConditions.push("IBETFAMITE.DESFAMITE LIKE @productFamily"); debugFilters.push(`Familia: ${args.productFamily}`); }
+            if (args.channel) { whereConditions.push("IBETFAD.DESFAD LIKE @channel"); debugFilters.push(`Canal: ${args.channel}`); }
+            
             if (args.status) {
                 if (args.status.toUpperCase() === 'VENDA') whereConditions.push("ibetpdd.INDSTUMVTPDD = 1");
                 else if (args.status.toUpperCase() === 'DEVOLUÇÃO') whereConditions.push("ibetpdd.INDSTUMVTPDD = 4");
+                debugFilters.push(`Status: ${args.status}`);
             }
 
+            // JOINS ESTRITAMENTE NECESSÁRIOS (1:1 ou N:1)
             const COMMON_JOINS = `
                 INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
                 INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
@@ -237,22 +260,20 @@ async function executeToolCall(name, args) {
                 INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
                 INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI
                 INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD
-                LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
-                LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
-                LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
-                LEFT JOIN flexx10071188.dbo.IBETDOMORIPDDAUT IBETDOMORIPDDAUT ON ibetpdd.CODORIPDD = IBETDOMORIPDDAUT.codoripdd
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
             `;
 
-            // --- QUERY DE TOTALIZAÇÃO (SEMPRE EXECUTA) ---
+            const ALL_JOINS = COMMON_JOINS + dynamicJoins;
+
+            // --- QUERY DE TOTALIZAÇÃO ---
             let totalQuery = `
                 ${SQL_QUERIES.BASE_CTE}
                 SELECT 
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido',
                     COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
                 FROM pedidos_filtrados ibetpdd
-                ${COMMON_JOINS}
+                ${ALL_JOINS}
             `;
             if (whereConditions.length > 0) totalQuery += ` WHERE ${whereConditions.join(' AND ')}`;
             
@@ -260,12 +281,18 @@ async function executeToolCall(name, args) {
             const totalLiquido = totalResult.recordset[0]['ValorLiquido'] || 0;
             const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
 
-            // PREPARAÇÃO DO PAYLOAD "ZERO GORDURA" PARA A IA
             let aiPayload = {
                 resumo: {
                     total_liquido_periodo: totalLiquido,
                     total_pedidos: qtdReal
                 }
+            };
+
+            // DEBUG META INFO PARA O FRONTEND
+            const debugMeta = {
+                period: `${args.startDate || defaultStart} a ${args.endDate || defaultEnd}`,
+                filters: debugFilters,
+                sqlLogic: usesLine ? 'Filtro de Linha Complexo Aplicado' : 'Filtro Padrão'
             };
             
             let frontendPayload = [];
@@ -290,7 +317,7 @@ async function executeToolCall(name, args) {
                         ${dimension} as 'Label',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido'
                     FROM pedidos_filtrados ibetpdd
-                    ${COMMON_JOINS}
+                    ${ALL_JOINS}
                     ${joinExtra}
                 `;
                 if (whereConditions.length > 0) aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
@@ -299,18 +326,16 @@ async function executeToolCall(name, args) {
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
 
-                // Para a IA, mandamos apenas os top 5 para não estourar tokens
                 aiPayload.top_5_grupos = aggResult.recordset.slice(0, 5);
             } else {
-                // --- MODO DETALHADO ---
-                // Buscamos apenas para o frontend. A IA não recebe a lista de transações para economizar tokens.
+                // --- MODO DETALHADO (FRONTEND) ---
                 let detailQuery = `
                     ${SQL_QUERIES.BASE_CTE}
                     SELECT TOP 50 
                         ibetpdd.DATEMSDOCPDD AS 'Data', ibetcplepg.nomepg AS 'Nome Vendedor',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido'
                     FROM pedidos_filtrados ibetpdd
-                    ${COMMON_JOINS}
+                    ${ALL_JOINS}
                     INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
                 `;
                 if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
@@ -321,8 +346,9 @@ async function executeToolCall(name, args) {
             }
 
             return {
-                ai_response: aiPayload, // Só vai pro Gemini
-                frontend_data: frontendPayload // Só vai pro React
+                ai_response: aiPayload,
+                frontend_data: frontendPayload,
+                debug_meta: debugMeta // Envia metadados para UI
             };
         }
 
@@ -361,10 +387,13 @@ async function runChatAgent(userMessage, history = []) {
         for (const call of functionCalls) {
             const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
             
-            // SEPARAÇÃO DE DADOS: IA recebe apenas o resumo leve. Frontend recebe o pesado.
             if (toolResult && toolResult.frontend_data) {
-                dataForFrontend = { samples: toolResult.frontend_data };
-                // O Gemini só vê isso:
+                // Passa os dados e o metadado de debug para o frontend
+                dataForFrontend = { 
+                    samples: toolResult.frontend_data,
+                    debugMeta: toolResult.debug_meta 
+                };
+                
                 functionResponses.push({
                     functionResponse: {
                         name: call.functionCall.name,
@@ -406,7 +435,6 @@ app.post('/api/v1/chat', async (req, res) => {
         const response = await runChatAgent(message, history);
         let formattedData = null;
         if (response.data && response.data.samples) {
-            // Formata básico para o gráfico do frontend
             const rows = response.data.samples;
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
@@ -417,7 +445,8 @@ app.post('/api/v1/chat', async (req, res) => {
                 recentTransactions: rows.map((r, i) => ({
                     id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], 
                     seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados'
-                }))
+                })),
+                debugMeta: response.data.debugMeta // Repassa debugMeta
             };
         }
         res.json({ text: response.text, data: formattedData });
@@ -453,4 +482,4 @@ async function sendWhatsappMessage(to, text, session) {
     } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V-Optimized running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V-Strict-Join running on ${PORT}`));

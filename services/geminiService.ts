@@ -73,7 +73,7 @@ export const sendMessageToAgent = async (
 
     return {
       text: result.text,
-      data: result.data
+      data: result.data // Agora inclui debugMeta vindo do backend
     };
 
   } catch (error: any) {

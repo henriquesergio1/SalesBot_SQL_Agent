@@ -58,4 +58,9 @@ export interface SalesSummary {
   topProduct: string;
   byCategory: { name: string; value: number }[];
   recentTransactions: SalesRecord[];
+  debugMeta?: {
+      period: string;
+      filters: string[];
+      sqlLogic: string;
+  };
 }

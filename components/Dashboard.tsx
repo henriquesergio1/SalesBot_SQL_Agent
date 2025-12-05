@@ -21,86 +21,111 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Key Metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow border-l-4 border-whatsapp-dark">
-          <p className="text-xs font-bold text-gray-500 uppercase">Receita Total</p>
-          <p className="text-2xl font-bold text-gray-800">
-            {data.totalRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-          </p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow border-l-4 border-blue-500">
-          <p className="text-xs font-bold text-gray-500 uppercase">Pedidos</p>
-          <p className="text-2xl font-bold text-gray-800">{data.totalOrders}</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow border-l-4 border-purple-500">
-          <p className="text-xs font-bold text-gray-500 uppercase">Ticket Médio</p>
-          <p className="text-2xl font-bold text-gray-800">
-            {data.averageTicket.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-          </p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow border-l-4 border-orange-500">
-          <p className="text-xs font-bold text-gray-500 uppercase">Top Produto</p>
-          <p className="text-sm font-bold text-gray-800 mt-1 truncate" title={data.topProduct}>
-            {data.topProduct}
-          </p>
-        </div>
-      </div>
-
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-4 rounded-lg shadow h-64 flex flex-col">
-          <h4 className="text-sm font-semibold text-gray-700 mb-4 border-b pb-2">Vendas por Categoria</h4>
-          <div className="flex-1 w-full min-h-0">
-             <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data.byCategory}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {data.byCategory.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} />
-              </PieChart>
-            </ResponsiveContainer>
+    <div className="flex flex-col h-full animate-fade-in">
+      <div className="space-y-6 flex-1 overflow-y-auto">
+        {/* Key Metrics */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-whatsapp-dark">
+            <p className="text-xs font-bold text-gray-500 uppercase">Receita Líquida</p>
+            <p className="text-2xl font-bold text-gray-800">
+              {data.totalRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </p>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-blue-500">
+            <p className="text-xs font-bold text-gray-500 uppercase">Pedidos</p>
+            <p className="text-2xl font-bold text-gray-800">{data.totalOrders}</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-purple-500">
+            <p className="text-xs font-bold text-gray-500 uppercase">Ticket Médio</p>
+            <p className="text-2xl font-bold text-gray-800">
+              {(data.totalRevenue / (data.totalOrders || 1)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </p>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow border-l-4 border-orange-500">
+            <p className="text-xs font-bold text-gray-500 uppercase">Destaque</p>
+            <p className="text-sm font-bold text-gray-800 mt-1 truncate" title={data.topProduct}>
+              {data.topProduct}
+            </p>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-lg shadow h-64 flex flex-col">
-          <h4 className="text-sm font-semibold text-gray-700 mb-4 border-b pb-2">Últimas Transações</h4>
-          <div className="overflow-y-auto flex-1">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-gray-100 sticky top-0">
-                <tr>
-                  <th className="p-2">Data</th>
-                  <th className="p-2">Vendedor</th>
-                  <th className="p-2 text-right">Valor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recentTransactions.map((t) => (
-                  <tr key={t.id} className="border-b hover:bg-gray-50">
-                    <td className="p-2">{new Date(t.date).toLocaleDateString('pt-BR')}</td>
-                    <td className="p-2">{t.seller}</td>
-                    <td className="p-2 text-right font-medium">
-                      {t.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </td>
+        {/* Charts Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white p-4 rounded-lg shadow h-64 flex flex-col">
+            <h4 className="text-sm font-semibold text-gray-700 mb-4 border-b pb-2">Distribuição</h4>
+            <div className="flex-1 w-full min-h-0">
+               <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={data.recentTransactions.slice(0, 5).map(t => ({ name: t.seller, value: t.total }))}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    fill="#8884d8"
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {data.recentTransactions.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow h-64 flex flex-col">
+            <h4 className="text-sm font-semibold text-gray-700 mb-4 border-b pb-2">Top Resultados</h4>
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-gray-100 sticky top-0">
+                  <tr>
+                    <th className="p-2">Data/Grupo</th>
+                    <th className="p-2">Nome</th>
+                    <th className="p-2 text-right">Valor Líquido</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.recentTransactions.map((t) => (
+                    <tr key={t.id} className="border-b hover:bg-gray-50">
+                      <td className="p-2">{t.date.length > 10 ? new Date(t.date).toLocaleDateString('pt-BR') : t.date}</td>
+                      <td className="p-2">{t.seller}</td>
+                      <td className="p-2 text-right font-medium">
+                        {t.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* DEBUG META FOOTER */}
+      {data.debugMeta && (
+          <div className="mt-4 p-3 bg-slate-800 rounded text-slate-300 text-[10px] font-mono border-t-4 border-slate-600">
+              <div className="flex justify-between items-center mb-1">
+                  <span className="font-bold text-white uppercase"><i className="fas fa-terminal mr-1"></i> Metadados da Consulta</span>
+                  <span className="bg-slate-700 px-2 py-0.5 rounded text-white">{data.debugMeta.sqlLogic}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                  <div>
+                      <span className="text-slate-500">Período:</span> {data.debugMeta.period}
+                  </div>
+                  <div>
+                      <span className="text-slate-500">Filtros Ativos:</span> 
+                      {data.debugMeta.filters.length > 0 ? (
+                          <span className="ml-1 text-green-400">{data.debugMeta.filters.join(' | ')}</span>
+                      ) : (
+                          <span className="ml-1 text-gray-500">Nenhum</span>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

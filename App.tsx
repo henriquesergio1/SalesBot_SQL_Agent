@@ -1,7 +1,8 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { IntegrationModal } from './components/IntegrationModal';
-import { sendMessageToAgent } from './services/geminiService';
+import { sendMessageToAgent, checkBackendHealth } from './services/geminiService';
 import { ChatMessage, SalesSummary } from './types';
 
 function App() {
@@ -19,12 +20,26 @@ function App() {
   const [currentData, setCurrentData] = useState<SalesSummary | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
+  // Status de Saúde do Sistema
+  const [health, setHealth] = useState({ sql: 'unknown', ai: 'unknown', status: 'unknown' });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Health Check Polling (A cada 30s)
+  useEffect(() => {
+    const runCheck = async () => {
+        const status = await checkBackendHealth();
+        setHealth(status);
+    };
+    runCheck(); // Check inicial
+    const interval = setInterval(runCheck, 30000);
+    return () => clearInterval(interval);
+  }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -61,7 +76,7 @@ function App() {
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'model',
-        content: 'Desculpe, tive um problema interno.',
+        content: 'Desculpe, tive um problema interno crítico.',
         timestamp: new Date()
       }]);
     } finally {
@@ -74,6 +89,23 @@ function App() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  // Lógica de Cor do Status
+  const getStatusColor = () => {
+      if (health.status === 'offline') return 'bg-gray-400'; // Backend off
+      if (health.sql === 'error') return 'bg-red-500'; // SQL Erro
+      if (health.ai === 'missing') return 'bg-yellow-400'; // API Key falta
+      if (health.sql === 'connected') return 'bg-green-400'; // Tudo OK
+      return 'bg-blue-400'; // Carregando/Unknown
+  };
+
+  const getStatusText = () => {
+      if (health.status === 'offline') return 'Backend Offline';
+      if (health.sql === 'error') return 'SQL Error (Check Pass)';
+      if (health.ai === 'missing') return 'API Key Missing';
+      if (health.sql === 'connected') return 'SQL Connected';
+      return 'Checking...';
   };
 
   return (
@@ -91,8 +123,8 @@ function App() {
              <div>
                 <h1 className="text-white font-semibold text-sm">Frete360 SalesBot</h1>
                 <div className="flex items-center text-[10px] text-blue-200">
-                   <span className="w-1.5 h-1.5 bg-green-400 rounded-full mr-1"></span>
-                   Docker API • SQL Active
+                   <span className={`w-2 h-2 rounded-full mr-1 ${getStatusColor()} animate-pulse`}></span>
+                   {getStatusText()}
                 </div>
              </div>
           </div>
@@ -186,8 +218,15 @@ function App() {
                 <span className="text-xs font-mono text-gray-600">docker-container-01</span>
              </div>
              <div className="h-8 w-px bg-gray-200 mx-2"></div>
-             <span className="text-xs text-green-600 bg-green-50 px-3 py-1.5 rounded-full border border-green-200 flex items-center gap-1.5 font-medium shadow-sm">
-                <i className="fas fa-database"></i> SQL Connected
+             
+             {/* Status Badge Dinâmico */}
+             <span className={`text-xs px-3 py-1.5 rounded-full border flex items-center gap-1.5 font-medium shadow-sm transition-colors ${
+                 health.sql === 'connected' ? 'bg-green-50 text-green-700 border-green-200' :
+                 health.sql === 'error' ? 'bg-red-50 text-red-700 border-red-200' :
+                 'bg-gray-100 text-gray-500 border-gray-200'
+             }`}>
+                <i className={`fas ${health.sql === 'connected' ? 'fa-database' : 'fa-exclamation-triangle'}`}></i> 
+                {getStatusText()}
              </span>
            </div>
         </div>

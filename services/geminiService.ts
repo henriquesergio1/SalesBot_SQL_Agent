@@ -3,20 +3,31 @@ import { SalesSummary } from "../types";
 
 // Função para pegar URL da API
 const getApiUrl = () => {
-  // 1. Tenta pegar do LocalStorage (definido na UI pelo usuário)
   const storedUrl = localStorage.getItem('salesbot_api_url');
   if (storedUrl) return storedUrl;
 
-  // 2. Tenta pegar do Vite Env
   // @ts-ignore
   const envUrl = import.meta.env?.VITE_API_URL;
   if (envUrl) {
     return envUrl.replace('/query', '/chat');
   }
 
-  // 3. Fallback Padrão
   return "http://localhost:8085/api/v1/chat";
 };
+
+export const checkBackendHealth = async () => {
+    const chatUrl = getApiUrl();
+    const healthUrl = chatUrl.replace('/chat', '/health');
+    
+    try {
+        const res = await fetch(healthUrl);
+        if (!res.ok) throw new Error("Offline");
+        return await res.json(); 
+        // Retorna { status: 'online', sql: 'connected'|'error', ai: 'ok'|'missing' }
+    } catch (e) {
+        return { status: 'offline', sql: 'disconnected', ai: 'unknown' };
+    }
+}
 
 export const sendMessageToAgent = async (
   message: string, 
@@ -38,11 +49,13 @@ export const sendMessageToAgent = async (
       })
     });
 
+    const result = await response.json();
+
     if (!response.ok) {
-      throw new Error(`Erro na API: ${response.status} ${response.statusText}`);
+        // Agora capturamos a mensagem real do erro enviada pelo servidor (Ex: Login Failed)
+        throw new Error(result.text || result.error || `Erro ${response.status}: ${response.statusText}`);
     }
 
-    const result = await response.json();
     return {
       text: result.text,
       data: result.data
@@ -50,8 +63,9 @@ export const sendMessageToAgent = async (
 
   } catch (error: any) {
     console.error("Erro ao comunicar com Backend:", error);
+    // Mensagem amigável para o chat
     return { 
-      text: `Erro de conexão com o servidor Docker (${API_URL}): ${error.message}. \n\nDICA: Abra as configurações (ícone de engrenagem) e verifique se o Endereço da API está correto (use o IP do servidor se não estiver no mesmo PC).` 
+      text: `🔴 **ERRO DE CONEXÃO**: ${error.message}. \n\nDICA: Verifique se o Docker está rodando e se o IP nas configurações está correto.` 
     };
   }
 };

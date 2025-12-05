@@ -25,7 +25,16 @@ const sqlConfig = {
     }
 };
 
-const aiClient = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Validação de API Key na Inicialização
+const apiKey = process.env.API_KEY || '';
+if (!apiKey || apiKey.includes('COLE_SUA')) {
+    console.error("==================================================");
+    console.error("ERRO CRÍTICO: API_KEY não configurada corretamente.");
+    console.error("Edite o docker-compose.yml e cole sua chave do Google AI Studio.");
+    console.error("==================================================");
+}
+
+const aiClient = new GoogleGenAI({ apiKey: apiKey });
 
 // Instrução do Sistema atualizada para Multi-Tools
 const getSystemInstruction = () => {
@@ -217,80 +226,90 @@ const SQL_QUERIES = {
 
 async function executeToolCall(name, args) {
     console.log(`[ToolExecutor] Executing ${name}`, args);
-    let pool = await sql.connect(sqlConfig);
-    const request = pool.request();
+    try {
+        let pool = await sql.connect(sqlConfig);
+        const request = pool.request();
 
-    // --- TOOL 1: SALES TEAM ---
-    if (name === 'get_sales_team') {
-        const result = await request.query(SQL_QUERIES.SALES_TEAM);
-        let team = result.recordset;
-        
-        // Filtro por ID exato (Prioridade Máxima)
-        if (args.id) {
-            team = team.filter(t => t.id == args.id);
-        }
-        // Filtro por Nome
-        else if (args.searchName) {
-            const term = args.searchName.toLowerCase();
-            team = team.filter(t => 
-                t.nome.toLowerCase().includes(term) || 
-                (t.supervisor_nome && t.supervisor_nome.toLowerCase().includes(term))
-            );
-        }
-        
-        if (args.role) {
-            team = team.filter(t => t.cargo.toUpperCase() === args.role.toUpperCase());
-        }
-        
-        if (team.length === 0) return { message: "Nenhum funcionário encontrado com esses critérios. Verifique o ID." };
-        return team;
-    }
-
-    // --- TOOL 2: CUSTOMERS ---
-    if (name === 'get_customer_base') {
-        if (!args.searchTerm) return { error: "searchTerm é obrigatório" };
-        request.input('search', sql.VarChar, `%${args.searchTerm}%`);
-        const result = await request.query(SQL_QUERIES.CUSTOMERS);
-        return result.recordset;
-    }
-
-    // --- TOOL 3: SALES DATA ---
-    if (name === 'query_sales_data') {
-        const now = new Date();
-        const defaultEnd = now.toISOString().split('T')[0];
-        const d = new Date();
-        d.setDate(d.getDate() - 30);
-        const defaultStart = d.toISOString().split('T')[0];
-
-        request.input('startDate', sql.Date, args.startDate || defaultStart);
-        request.input('endDate', sql.Date, args.endDate || defaultEnd);
-
-        const result = await request.query(SQL_QUERIES.SALES_DATA);
-        let data = result.recordset;
-
-        // Filtros JS em Memória
-        data = data.filter(r => {
-            let match = true;
-            if (args.sellerName) match = match && String(r['Nome Vendedor']).toLowerCase().includes(args.sellerName.toLowerCase());
-            if (args.sellerId) match = match && r['Vendedor'] == args.sellerId;
-            if (args.customerId) match = match && r['Sold'] == args.customerId;
-            if (args.customerName) match = match && String(r['Razao Social']).toLowerCase().includes(args.customerName.toLowerCase());
-            if (args.productName) match = match && String(r['Item Descrição']).toLowerCase().includes(args.productName.toLowerCase());
-            if (args.status) match = match && String(r['Status']).toUpperCase() === args.status.toUpperCase();
+        // --- TOOL 1: SALES TEAM ---
+        if (name === 'get_sales_team') {
+            const result = await request.query(SQL_QUERIES.SALES_TEAM);
+            let team = result.recordset;
             
-            if (args.generalSearch) {
-                const term = args.generalSearch.toLowerCase();
-                const rowStr = Object.values(r).join(' ').toLowerCase();
-                match = match && rowStr.includes(term);
+            // Filtro por ID exato (Prioridade Máxima)
+            if (args.id) {
+                team = team.filter(t => t.id == args.id);
             }
-            return match;
-        });
+            // Filtro por Nome
+            else if (args.searchName) {
+                const term = args.searchName.toLowerCase();
+                team = team.filter(t => 
+                    t.nome.toLowerCase().includes(term) || 
+                    (t.supervisor_nome && t.supervisor_nome.toLowerCase().includes(term))
+                );
+            }
+            
+            if (args.role) {
+                team = team.filter(t => t.cargo.toUpperCase() === args.role.toUpperCase());
+            }
+            
+            if (team.length === 0) return { message: "Nenhum funcionário encontrado com esses critérios. Verifique o ID." };
+            return team;
+        }
 
-        // Resumo Estatístico para a IA
-        return summarizeSalesData(data);
+        // --- TOOL 2: CUSTOMERS ---
+        if (name === 'get_customer_base') {
+            if (!args.searchTerm) return { error: "searchTerm é obrigatório" };
+            request.input('search', sql.VarChar, `%${args.searchTerm}%`);
+            const result = await request.query(SQL_QUERIES.CUSTOMERS);
+            return result.recordset;
+        }
+
+        // --- TOOL 3: SALES DATA ---
+        if (name === 'query_sales_data') {
+            const now = new Date();
+            const defaultEnd = now.toISOString().split('T')[0];
+            const d = new Date();
+            d.setDate(d.getDate() - 30);
+            const defaultStart = d.toISOString().split('T')[0];
+
+            request.input('startDate', sql.Date, args.startDate || defaultStart);
+            request.input('endDate', sql.Date, args.endDate || defaultEnd);
+
+            const result = await request.query(SQL_QUERIES.SALES_DATA);
+            let data = result.recordset;
+
+            // Filtros JS em Memória
+            data = data.filter(r => {
+                let match = true;
+                if (args.sellerName) match = match && String(r['Nome Vendedor']).toLowerCase().includes(args.sellerName.toLowerCase());
+                if (args.sellerId) match = match && r['Vendedor'] == args.sellerId;
+                if (args.customerId) match = match && r['Sold'] == args.customerId;
+                if (args.customerName) match = match && String(r['Razao Social']).toLowerCase().includes(args.customerName.toLowerCase());
+                if (args.productName) match = match && String(r['Item Descrição']).toLowerCase().includes(args.productName.toLowerCase());
+                if (args.status) match = match && String(r['Status']).toUpperCase() === args.status.toUpperCase();
+                
+                if (args.generalSearch) {
+                    const term = args.generalSearch.toLowerCase();
+                    const rowStr = Object.values(r).join(' ').toLowerCase();
+                    match = match && rowStr.includes(term);
+                }
+                return match;
+            });
+
+            // Resumo Estatístico para a IA
+            return summarizeSalesData(data);
+        }
+
+        return { error: "Ferramenta não encontrada" };
+    } catch (sqlErr) {
+        console.error("SQL Error:", sqlErr);
+        // Retorna o erro exato para a IA, assim ela pode avisar o usuário
+        return { 
+            error: "CRITICAL SQL ERROR", 
+            details: sqlErr.message, 
+            tip: "O administrador deve verificar as credenciais do banco no docker-compose.yml" 
+        };
     }
-
-    return { error: "Ferramenta não encontrada" };
 }
 
 function summarizeSalesData(data) {
@@ -316,6 +335,10 @@ function summarizeSalesData(data) {
 // ==================================================================================
 
 async function runChatAgent(userMessage, history = []) {
+    if (!process.env.API_KEY || process.env.API_KEY.includes('COLE_SUA')) {
+        throw new Error("A API Key do Google Gemini não está configurada no Backend. Verifique o docker-compose.");
+    }
+
     let chatHistory = [];
     if (history && Array.isArray(history)) {
         chatHistory = history
@@ -383,6 +406,31 @@ async function runChatAgent(userMessage, history = []) {
 // 6. ROTAS API
 // ==================================================================================
 
+// Rota de Diagnóstico (Health Check)
+app.get('/api/v1/health', async (req, res) => {
+    let sqlStatus = 'disconnected';
+    let sqlError = null;
+
+    try {
+        const pool = await sql.connect(sqlConfig);
+        await pool.request().query('SELECT 1');
+        sqlStatus = 'connected';
+    } catch (e) {
+        sqlStatus = 'error';
+        sqlError = e.message;
+        console.error("Health Check SQL Failed:", e.message);
+    }
+
+    const apiKeyStatus = (process.env.API_KEY && !process.env.API_KEY.includes('COLE_SUA')) ? 'ok' : 'missing';
+
+    res.json({
+        status: 'online',
+        sql: sqlStatus,
+        sqlError: sqlError,
+        ai: apiKeyStatus
+    });
+});
+
 // Rota WEB
 app.post('/api/v1/chat', async (req, res) => {
     try {
@@ -398,7 +446,8 @@ app.post('/api/v1/chat', async (req, res) => {
         res.json({ text: response.text, data: formattedData });
     } catch (err) {
         console.error("Erro Web Chat:", err);
-        res.status(500).json({ text: "Erro interno." });
+        // Retorna 500 mas com mensagem descritiva para o frontend mostrar
+        res.status(500).json({ text: `Erro no Servidor: ${err.message}` });
     }
 });
 
@@ -436,7 +485,7 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
             await sendWhatsappMessage(sender, response.text, instance);
         } catch (err) {
             console.error("Erro WhatsApp:", err);
-            await sendWhatsappMessage(sender, "Ocorreu um erro técnico.", instance);
+            await sendWhatsappMessage(sender, `Erro Técnico: ${err.message}`, instance);
         }
     })();
 

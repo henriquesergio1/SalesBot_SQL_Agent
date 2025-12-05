@@ -45,8 +45,10 @@ HOJE É: ${today}.
 REGRAS DE OURO (ANTI-ALUCINAÇÃO):
 1. **NUNCA INVENTE NOMES OU VALORES**. Use apenas o que a tool retornar.
 2. **"SETOR" É O MESMO QUE "ID DO VENDEDOR"**. (Ex: "Setor 502" = sellerId: 502).
-3. **"QUAIS CLIENTES?"**: Use sempre 'groupBy: "customer"' na tool query_sales_data.
-4. **"DIA A DIA"**: Use 'groupBy: "day"'.
+3. **FILTROS COMPLEXOS**:
+   - **Linha**: NESTLE, GAROTO, PURINA, SECA, FOOD.
+   - **Origem**: CONNECT, BEES, FORCE.
+   - **Grupo/Família**: Refere-se a produtos (Ex: CHOCOLATES, CAFE).
 
 DEFINIÇÃO DE VALORES (IMPORTANTE):
 - O sistema trabalha com **Valor Líquido** (Valor dos Itens - Impostos ST e IPI).
@@ -62,7 +64,7 @@ ESTRATÉGIA DE ANÁLISE:
 TOOLS:
 1. **get_sales_team**: Use para descobrir quem é o Vendedor 105, 502, etc. (Busca exata no banco).
 2. **get_customer_base**: Buscar dados cadastrais de clientes.
-3. **query_sales_data**: Ferramenta Principal de Vendas.
+3. **query_sales_data**: Ferramenta Principal de Vendas. Suporta filtros por Linha, Origem, Cidade, Grupo, etc.
 `;
 };
 
@@ -98,7 +100,7 @@ const customerBaseTool = {
 
 const querySalesTool = {
   name: "query_sales_data",
-  description: "Busca vendas. Use 'groupBy' para listas agregadas (Ex: Top Clientes, Vendas por Mês, Dia a Dia).",
+  description: "Busca vendas com filtros avançados. Use 'groupBy' para agregações.",
   parameters: {
     type: "OBJECT",
     properties: {
@@ -107,11 +109,20 @@ const querySalesTool = {
       sellerId: { type: "INTEGER", description: "ID do Vendedor (Setor)" },
       customerId: { type: "INTEGER" },
       status: { type: "STRING", description: "'VENDA' ou 'DEVOLUÇÃO'" },
-      generalSearch: { type: "STRING" },
+      
+      // NOVOS FILTROS
+      line: { type: "STRING", description: "Linha de Produto (SECA, GAROTO, FOOD, PURINA, ETC)" },
+      origin: { type: "STRING", description: "Origem do Pedido (CONNECT, BEES, ETC)" },
+      city: { type: "STRING", description: "Nome da Cidade" },
+      productGroup: { type: "STRING", description: "Grupo do Produto" },
+      productFamily: { type: "STRING", description: "Família do Produto" },
+      channel: { type: "STRING", description: "Canal de Remuneração" },
+      generalSearch: { type: "STRING", description: "Busca genérica em texto" },
+
       groupBy: { 
           type: "STRING", 
-          description: "Agrupar por: 'day', 'month', 'seller', 'supervisor', 'city', 'product_group', 'line', 'customer'",
-          enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer"]
+          description: "Agrupar por: 'day', 'month', 'seller', 'supervisor', 'city', 'product_group', 'line', 'customer', 'origin'",
+          enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin"]
       }
     },
   },
@@ -228,11 +239,68 @@ async function executeToolCall(name, args) {
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
 
+            // NOVOS INPUTS
+            if (args.line) request.input('line', sql.VarChar, `%${args.line}%`);
+            if (args.origin) request.input('origin', sql.VarChar, `%${args.origin}%`);
+            if (args.city) request.input('city', sql.VarChar, `%${args.city}%`);
+            if (args.productGroup) request.input('productGroup', sql.VarChar, `%${args.productGroup}%`);
+            if (args.productFamily) request.input('productFamily', sql.VarChar, `%${args.productFamily}%`);
+            if (args.channel) request.input('channel', sql.VarChar, `%${args.channel}%`);
+            if (args.generalSearch) request.input('generalSearch', sql.VarChar, `%${args.generalSearch}%`);
+
+
             // Filtros para WHERE dinâmico
             let whereConditions = [];
             if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
             if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
+
+            // --- LÓGICA SQL COMPLEXA PARA OS NOVOS FILTROS ---
             
+            // 1. LINHA (Lógica CASE)
+            if (args.line) {
+                whereConditions.push(`
+                    (CASE 
+                        WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
+                        WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
+                        ELSE IBETDOMLINNTE.DESLINNTE 
+                    END) LIKE @line
+                `);
+            }
+
+            // 2. ORIGEM (Lógica ISNULL)
+            if (args.origin) {
+                whereConditions.push(`ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT') LIKE @origin`);
+            }
+
+            // 3. OUTROS FILTROS
+            if (args.city) whereConditions.push("IBETCDD.descdd LIKE @city");
+            if (args.productGroup) whereConditions.push("IBETGPOITE.DESGPOITE LIKE @productGroup");
+            if (args.productFamily) whereConditions.push("IBETFAMITE.DESFAMITE LIKE @productFamily");
+            if (args.channel) whereConditions.push("IBETFAD.DESFAD LIKE @channel");
+
+            if (args.status) {
+                if (args.status.toUpperCase() === 'VENDA') whereConditions.push("ibetpdd.INDSTUMVTPDD = 1");
+                if (args.status.toUpperCase() === 'DEVOLUÇÃO') whereConditions.push("ibetpdd.INDSTUMVTPDD = 4");
+            }
+            
+            // JOINs COMUNS NECESSÁRIOS (Usados tanto no TOTAL quanto no DETALHE)
+            const COMMON_JOINS = `
+                INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
+                INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
+                INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE
+                INNER JOIN flexx10071188.dbo.IBETFAMITE IBETFAMITE ON IBETCATITE.CODFAMITE = IBETFAMITE.CODFAMITE AND IBETFAMITE.CODGPOITE = IBETCATITE.CODGPOITE
+                INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
+                INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI
+                INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD
+                LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
+                LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
+                LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
+                LEFT JOIN flexx10071188.dbo.IBETDOMORIPDDAUT IBETDOMORIPDDAUT ON ibetpdd.CODORIPDD = IBETDOMORIPDDAUT.codoripdd
+                
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+            `;
+
             // --- QUERY DE TOTALIZAÇÃO (LÍQUIDO) ---
             let totalQuery = `
                 ${SQL_QUERIES.BASE_CTE}
@@ -241,9 +309,7 @@ async function executeToolCall(name, args) {
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido',
                     COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
                 FROM pedidos_filtrados ibetpdd
-                INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
-                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
-                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+                ${COMMON_JOINS}
             `;
             if (whereConditions.length > 0) totalQuery += ` WHERE ${whereConditions.join(' AND ')}`;
             
@@ -259,35 +325,37 @@ async function executeToolCall(name, args) {
                 switch(args.groupBy) {
                     case 'day': dimensionColumn = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; break;
                     case 'month': dimensionColumn = "FORMAT(ibetpdd.DATEMSDOCPDD, 'yyyy-MM')"; break;
-                    case 'seller': dimensionColumn = "ibetcplepg.nomepg"; break;
+                    case 'seller': dimensionColumn = "ibetcplepg.nomepg"; break; // Precisa do join de vendedor extra
                     case 'supervisor': dimensionColumn = "SUP.nomepg"; break;
                     case 'city': dimensionColumn = "IBETCDD.descdd"; break;
                     case 'product_group': dimensionColumn = "IBETGPOITE.DESGPOITE"; break;
-                    case 'line': dimensionColumn = "IBETDOMLINNTE.DESLINNTE"; break;
+                    case 'line': 
+                        dimensionColumn = `(CASE 
+                            WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
+                            WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
+                            ELSE IBETDOMLINNTE.DESLINNTE 
+                        END)`; 
+                        break;
+                    case 'origin': dimensionColumn = "ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT')"; break;
                     case 'customer': dimensionColumn = "IBETCET.NOMRAZSCLCET"; break;
                     default: return { error: `Agrupamento não suportado.` };
                 }
 
-                // Importante: Adicionados LEFT JOINs de IPI e ST aqui também para calcular o Líquido no Group By
+                // JOINs EXTRAS PARA VENDEDOR/SUPERVISOR SE NECESSÁRIO
+                let extraJoins = `
+                    INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
+                    LEFT JOIN flexx10071188.dbo.IBETSBN IBETSBN ON ibetcplepg.CODMTCEPG = IBETSBN.codmtcepgsbn
+                    LEFT JOIN flexx10071188.dbo.ibetcplepg SUP ON SUP.TPOEPG = 'S' AND IBETSBN.CODMTCEPGRPS = SUP.CODMTCEPG
+                `;
+
                 let aggQuery = `
                     ${SQL_QUERIES.BASE_CTE}
                     SELECT TOP 100
                         ${dimensionColumn} as 'Label',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido'
                     FROM pedidos_filtrados ibetpdd
-                    INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
-                    INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
-                    INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE
-                    INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
-                    LEFT JOIN flexx10071188.dbo.IBETSBN IBETSBN ON ibetcplepg.CODMTCEPG = IBETSBN.codmtcepgsbn
-                    LEFT JOIN flexx10071188.dbo.ibetcplepg SUP ON SUP.TPOEPG = 'S' AND IBETSBN.CODMTCEPGRPS = SUP.CODMTCEPG
-                    LEFT JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
-                    LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
-                    LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
-                    LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
-                    
-                    LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
-                    LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+                    ${COMMON_JOINS}
+                    ${extraJoins}
                 `;
                 if (whereConditions.length > 0) aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
                 aggQuery += ` GROUP BY ${dimensionColumn} ORDER BY 'ValorLiquido' DESC`;
@@ -295,7 +363,7 @@ async function executeToolCall(name, args) {
                 const result = await request.query(aggQuery);
                 return { 
                     summary: {
-                        total_calculado_liquido: totalLiquido, // O principal agora é o líquido
+                        total_calculado_liquido: totalLiquido, 
                         total_bruto_referencia: totalBruto,
                         qtd_pedidos: qtdReal,
                         tipo_relatorio: `Agrupado por ${args.groupBy} (Valores Líquidos)`,
@@ -305,8 +373,13 @@ async function executeToolCall(name, args) {
             }
 
             // ==================================================================
-            // MODO DETALHADO (SELECT *) - COM LIMIT DE SEGURANÇA NA VISUALIZAÇÃO
+            // MODO DETALHADO
             // ==================================================================
+            // JOINs EXTRAS PARA VENDEDOR NA LISTA
+            let extraJoinsDetail = `
+                INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
+            `;
+
             let detailQuery = `
                 ${SQL_QUERIES.BASE_CTE}
                 SELECT TOP 50 
@@ -314,34 +387,34 @@ async function executeToolCall(name, args) {
                     ibetpdd.CODPDD AS 'Pedido',
                     SUM(IBETITEPDD.VALTOTITEPDD) AS 'Valor Bruto',
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
-                    IBETITEPDD.QTDITEPDD AS 'Quantidade',
                     IBETCET.NOMRAZSCLCET AS 'Razao Social',
                     ibetcplepg.nomepg AS 'Nome Vendedor',
-                    IBETCATITE.DESCATITE AS 'Item Descrição'
+                    ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT') as 'Origem',
+                    (CASE 
+                        WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
+                        WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
+                        ELSE IBETDOMLINNTE.DESLINNTE 
+                    END) as 'Linha'
                 FROM pedidos_filtrados ibetpdd
-                INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
-                INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
-                INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
-                INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
-                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
-                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+                ${COMMON_JOINS}
+                ${extraJoinsDetail}
             `;
 
             if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
             detailQuery += `
                 GROUP BY 
-                    ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, IBETITEPDD.QTDITEPDD,
-                    IBETCET.NOMRAZSCLCET, ibetcplepg.nomepg, IBETCATITE.DESCATITE
+                    ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, 
+                    IBETCET.NOMRAZSCLCET, ibetcplepg.nomepg, 
+                    IBETDOMORIPDDAUT.dscoripdd, IBETCTI.DESCTI, IBETDOMLINNTE.DESLINNTE
                 ORDER BY ibetpdd.DATEMSDOCPDD DESC
             `;
 
             const result = await request.query(detailQuery);
             let data = result.recordset;
 
-            // Retorna o Total Calculado via SQL (Exato) + Amostra de 50 registros
             return {
                 summary: {
-                    total_vendas_R$: totalLiquido, // <--- MUDANÇA: A IA recebe o Líquido como principal
+                    total_vendas_R$: totalLiquido, 
                     valor_bruto_auxiliar: totalBruto,
                     total_itens: qtdReal,
                     nota: "Valores LÍQUIDOS calculados no servidor SQL."
@@ -447,14 +520,18 @@ app.post('/api/v1/chat', async (req, res) => {
 function formatForReact(rows) {
     if (!rows) return null;
     return {
-        // MUDANÇA: Frontend agora soma o Valor Líquido para exibir no Dashboard
         totalRevenue: rows.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0),
         totalOrders: rows.length,
         averageTicket: 0,
         topProduct: rows[0]?.['Item Descrição'] || 'N/A',
         byCategory: [],
         recentTransactions: rows.map((r, i) => ({
-            id: i, date: r['Data'], total: r['Valor Liquido'], seller: r['Nome Vendedor'], product: r['Item Descrição']
+            id: i, 
+            date: r['Data'], 
+            total: r['Valor Liquido'], 
+            seller: r['Nome Vendedor'], 
+            product: r['Item Descrição'] || r['Linha'],
+            origin: r['Origem']
         }))
     };
 }
@@ -468,8 +545,6 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
 
     if (msg && sender && !sender.includes('@g.us')) {
         console.log(`[WPP] ${sender}: ${msg}`);
-        // Nota: O histórico do WhatsApp não está sendo persistido aqui. 
-        // Para conversas longas no WPP, seria necessário um banco de dados de histórico.
         runChatAgent(msg).then(resp => {
             sendWhatsappMessage(sender, resp.text, instance);
         }).catch(err => {

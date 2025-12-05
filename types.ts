@@ -15,8 +15,11 @@ export interface SalesRecord {
   city?: string;
   status?: string;
   line?: string;
+  origin?: string; // Origem (Connect, Bees)
   channel?: string; // Canal Remuneração
   customer?: string; // Razão Social
+  group?: string; // Grupo de Produto
+  family?: string; // Família de Produto
 }
 
 export interface ChatMessage {
@@ -41,6 +44,10 @@ export interface FilterParams {
   city?: string;
   status?: string;
   line?: string;
+  origin?: string;
+  group?: string;
+  family?: string;
+  channel?: string;
   generalSearch?: string;
 }
 

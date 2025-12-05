@@ -1,3 +1,4 @@
+
 export interface SalesRecord {
   id: string;
   date: string; // ISO date string
@@ -20,6 +21,23 @@ export interface SalesRecord {
   customer?: string; // Razão Social
   group?: string; // Grupo de Produto
   family?: string; // Família de Produto
+}
+
+export interface VisitRecord {
+    cod_vend: number;
+    nome_vendedor: string;
+    cod_cliente: number;
+    razao_social: string;
+    dia_semana: string;
+    periodicidade: string;
+    data_visita: string;
+}
+
+export interface OpportunityRecord {
+    cod_produto: number;
+    descricao: string;
+    grupo: string;
+    ultima_compra: string; // Data
 }
 
 export interface ChatMessage {
@@ -58,6 +76,9 @@ export interface SalesSummary {
   topProduct: string;
   byCategory: { name: string; value: number }[];
   recentTransactions: SalesRecord[];
+  // Novos campos para Visitas e Oportunidades
+  visits?: VisitRecord[];
+  opportunities?: OpportunityRecord[];
   debugMeta?: {
       period: string;
       filters: string[];

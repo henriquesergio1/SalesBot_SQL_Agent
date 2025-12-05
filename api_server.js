@@ -39,25 +39,26 @@ const aiClient = new GoogleGenAI({ apiKey: apiKey });
 const getSystemInstruction = () => {
     const today = new Date().toISOString().split('T')[0];
     return `
-Você é o "SalesBot", um analista de inteligência de negócios SQL Expert.
+Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${today}.
 
-REGRAS CRÍTICAS (PERFORMANCE & PRECISÃO):
-1. **RESPOSTAS CURTAS**: Você recebe apenas os totais. Seja direto. Ex: "O total é R$ 10.000,00".
-2. **FILTROS DE LINHA**:
-   - Se o usuário disser "Linha Seca", o filtro é apenas "SECA".
-   - Opções válidas: NESTLE, GAROTO, PURINA, SECA, FOOD.
-3. **VALORES**:
-   - Trabalhe SEMPRE com o **Valor Líquido** retornado pela tool.
+OBJETIVO:
+Ajudar vendedores com Metas, Vendas e **ROTA DE VISITAS**.
 
-ESTRATÉGIA:
-- Se o usuário pedir "detalhes" ou "quais clientes", USE O PARÂMETRO 'groupBy'.
-- Se o usuário pedir apenas "total", não use groupBy, apenas os filtros de data e categoria.
+FERRAMENTAS (TOOLS):
+1. **get_scheduled_visits** (NOVA): Use quando perguntarem "Quais clientes visitar hoje?", "Minha rota", "Agenda".
+   - Requer ID do Vendedor. Se não souber, pergunte ou use get_sales_team.
+2. **analyze_client_gap** (NOVA): Use para gerar **Oportunidades**.
+   - Use quando perguntarem "O que oferecer para o cliente X?", "O que ele parou de comprar?".
+   - Identifica produtos que o cliente comprava mas não comprou este mês.
+3. **query_sales_data**: Para totais de vendas e performance.
+4. **get_sales_team**: Para descobrir IDs de vendedores.
+5. **get_customer_base**: Para buscar IDs de clientes.
 
-TOOLS:
-1. **get_sales_team**: Valida IDs de vendedores e supervisores.
-2. **get_customer_base**: Busca dados cadastrais.
-3. **query_sales_data**: Ferramenta PRINCIPAL. Retorna totais financeiros.
+COMPORTAMENTO:
+- Se o vendedor perguntar da rota, liste os clientes e sugira: "Quer analisar oportunidades para algum deles?"
+- Se analisar oportunidades, liste os Top 3 produtos que o cliente "esqueceu" de comprar.
+- Seja proativo.
 `;
 };
 
@@ -89,6 +90,31 @@ const customerBaseTool = {
     }
 };
 
+const visitsTool = {
+    name: "get_scheduled_visits",
+    description: "Retorna a ROTA de visitas programada para um vendedor em uma data específica.",
+    parameters: {
+        type: "OBJECT",
+        properties: {
+            sellerId: { type: "INTEGER", description: "ID do Vendedor (Setor)" },
+            date: { type: "STRING", description: "YYYY-MM-DD (Padrão: Hoje)" }
+        },
+        required: ["sellerId"]
+    }
+};
+
+const opportunityTool = {
+    name: "analyze_client_gap",
+    description: "Analisa produtos que o cliente comprava frequentemente mas NÃO comprou no mês atual (Oportunidade/Positivação).",
+    parameters: {
+        type: "OBJECT",
+        properties: {
+            customerId: { type: "INTEGER", description: "ID do Cliente" }
+        },
+        required: ["customerId"]
+    }
+};
+
 const querySalesTool = {
   name: "query_sales_data",
   description: "Busca vendas. Use 'groupBy' para detalhar por cliente/dia/produto.",
@@ -115,7 +141,7 @@ const querySalesTool = {
   },
 };
 
-const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySalesTool] }];
+const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySalesTool, visitsTool, opportunityTool] }];
 
 // ==================================================================================
 // 3. QUERIES SQL BASE
@@ -129,21 +155,102 @@ const SQL_QUERIES = {
         LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
         WHERE V.TPOEPG IN ('V', 'S', 'M')
     `,
-    BASE_CTE: `
-        WITH pedidos_filtrados AS (
+    // Query Complexa de Rota fornecida pelo usuário
+    VISITS_QUERY: `
+        DECLARE @DataBase DATE = @targetDate;
+        DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1);
+        DECLARE @DataFimMes DATE = EOMONTH(@DataBase);
+
+        WITH DatasMes AS (
+            SELECT @DataInicioMes AS DataVisita
+            UNION ALL
+            SELECT DATEADD(DAY, 1, DataVisita)
+            FROM DatasMes
+            WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes
+        ),
+        DiasComInfo AS (
             SELECT 
-                ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD,
-                ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTCEPG, ibetpdd.CODMTV,
-                ibetpdd.CODORIPDD, ibetpdd.codvec
-            FROM flexx10071188.dbo.ibetpdd
-            WHERE 
-                DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate
-                AND INDSTUMVTPDD IN (1, 4)
-                AND NUMDOCPDD <> 0
-                AND CODCNDPGTRVD NOT IN (9998, 9999)
+                d.DataVisita,
+                CASE 
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 3 THEN '2'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 4 THEN '3'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 5 THEN '4'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 6 THEN '5'
+                    WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6'
+                END AS DiaSemana
+            FROM DatasMes d
         )
+        SELECT DISTINCT
+            e.CODMTCEPGVDD AS 'CodVend',
+            epg.NOMEPG AS 'NomeVendedor',
+            a.CODCET AS 'CodCliente', 
+            d.NOMRAZSCLCET AS 'RazaoSocial', 
+            x.DataVisita AS 'DataVisita',
+            a.DESCCOVSTCET AS 'Periodicidade'
+        FROM flexx10071188.dbo.IBETVSTCET a
+        INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana
+        INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f 
+            ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita
+            AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%'
+        INNER JOIN flexx10071188.dbo.IBETCET d 
+            ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP
+        INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e 
+            ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC
+        INNER JOIN flexx10071188.dbo.IBETCPLEPG epg 
+            ON epg.CODMTCEPG = e.CODMTCEPGVDD
+        WHERE d.TPOSTUCET = 'A' 
+          AND x.DataVisita = @targetDate
+          AND e.CODMTCEPGVDD = @sellerId
+        ORDER BY x.DataVisita
+        OPTION (MAXRECURSION 1000);
+    `,
+    // Query de Oportunidade: Produtos comprados nos ultimos 120 dias - Produtos comprados no mês atual
+    OPPORTUNITY_QUERY: `
+        WITH Historico AS (
+             SELECT DISTINCT I.CODCATITE
+             FROM flexx10071188.dbo.ibetpdd C
+             INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD
+             WHERE C.CODCET = @customerId
+             AND C.DATEMSDOCPDD >= DATEADD(MONTH, -4, GETDATE())
+             AND C.INDSTUMVTPDD = 1 -- Apenas Vendas
+        ),
+        CompradoMesAtual AS (
+             SELECT DISTINCT I.CODCATITE
+             FROM flexx10071188.dbo.ibetpdd C
+             INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD
+             WHERE C.CODCET = @customerId
+             AND MONTH(C.DATEMSDOCPDD) = MONTH(GETDATE())
+             AND YEAR(C.DATEMSDOCPDD) = YEAR(GETDATE())
+             AND C.INDSTUMVTPDD = 1
+        )
+        SELECT TOP 10 
+            P.CODCATITE as cod_produto, 
+            P.DESCATITE as descricao, 
+            G.DESGPOITE as grupo
+        FROM Historico H
+        LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE
+        INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE
+        INNER JOIN flexx10071188.dbo.IBETGPOITE G ON P.CODGPOITE = G.CODGPOITE
+        WHERE CM.CODCATITE IS NULL -- O que ele NÃO comprou este mês
     `
 };
+
+const BASE_CTE = `
+    WITH pedidos_filtrados AS (
+        SELECT 
+            ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD,
+            ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTCEPG, ibetpdd.CODMTV,
+            ibetpdd.CODORIPDD, ibetpdd.codvec
+        FROM flexx10071188.dbo.ibetpdd
+        WHERE 
+            DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate
+            AND INDSTUMVTPDD IN (1, 4)
+            AND NUMDOCPDD <> 0
+            AND CODCNDPGTRVD NOT IN (9998, 9999)
+    )
+`;
 
 // ==================================================================================
 // 4. EXECUTOR DE FERRAMENTAS
@@ -177,6 +284,39 @@ async function executeToolCall(name, args) {
             return result.recordset;
         }
 
+        // TOOL 4: ROTA DE VISITAS (NOVA)
+        if (name === 'get_scheduled_visits') {
+            const date = args.date || new Date().toISOString().split('T')[0];
+            request.input('targetDate', sql.Date, date);
+            request.input('sellerId', sql.Int, args.sellerId);
+            
+            const result = await request.query(SQL_QUERIES.VISITS_QUERY);
+            
+            const summary = {
+                data: date,
+                total_visitas: result.recordset.length,
+                clientes: result.recordset.map(r => `${r.CodCliente} - ${r.RazaoSocial}`)
+            };
+
+            return {
+                ai_response: summary, // IA recebe resumo
+                frontend_data: result.recordset, // Frontend recebe tabela completa
+                debug_meta: { period: date, filters: [`Vendedor ${args.sellerId}`], sqlLogic: 'Rota de Visitas Complexa' }
+            };
+        }
+
+        // TOOL 5: OPORTUNIDADES (GAP ANALYSIS)
+        if (name === 'analyze_client_gap') {
+            request.input('customerId', sql.Int, args.customerId);
+            const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
+            
+            return {
+                ai_response: { oportunidades_encontradas: result.recordset.length, top_produtos: result.recordset },
+                frontend_data: result.recordset,
+                debug_meta: { period: 'Últimos 4 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' }
+            };
+        }
+
         // TOOL 3: VENDAS (OTIMIZADO & CORRIGIDO DUPLICAÇÃO)
         if (name === 'query_sales_data') {
             const now = new Date();
@@ -191,7 +331,6 @@ async function executeToolCall(name, args) {
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
 
-            // LIMPEZA DE INPUT DA LINHA
             if (args.line) {
                 const cleanLine = args.line.toUpperCase().replace('LINHA', '').trim();
                 request.input('line', sql.VarChar, `%${cleanLine}%`);
@@ -205,13 +344,12 @@ async function executeToolCall(name, args) {
             if (args.generalSearch) request.input('generalSearch', sql.VarChar, `%${args.generalSearch}%`);
 
             let whereConditions = [];
-            // Arrays para debug
             let debugFilters = [];
 
             if (args.sellerId) { whereConditions.push("ibetpdd.CODMTCEPG = @sellerId"); debugFilters.push(`Vendedor: ${args.sellerId}`); }
             if (args.customerId) { whereConditions.push("ibetpdd.CODCET = @customerId"); debugFilters.push(`Cliente: ${args.customerId}`); }
 
-            // Dynamic Joins - Só adiciona se o filtro for usado para evitar duplicação (Cartesian Product)
+            // Dynamic Joins
             let dynamicJoins = "";
             let usesLine = false;
 
@@ -227,7 +365,6 @@ async function executeToolCall(name, args) {
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD ";
             }
 
-            // Filtros que dependem dos Joins Dinâmicos ou Comuns
             if (args.line) {
                 whereConditions.push(`
                     (CASE 
@@ -251,7 +388,6 @@ async function executeToolCall(name, args) {
                 debugFilters.push(`Status: ${args.status}`);
             }
 
-            // JOINS ESTRITAMENTE NECESSÁRIOS (1:1 ou N:1)
             const COMMON_JOINS = `
                 INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
                 INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
@@ -266,9 +402,8 @@ async function executeToolCall(name, args) {
 
             const ALL_JOINS = COMMON_JOINS + dynamicJoins;
 
-            // --- QUERY DE TOTALIZAÇÃO ---
             let totalQuery = `
-                ${SQL_QUERIES.BASE_CTE}
+                ${BASE_CTE}
                 SELECT 
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido',
                     COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
@@ -288,7 +423,6 @@ async function executeToolCall(name, args) {
                 }
             };
 
-            // DEBUG META INFO PARA O FRONTEND
             const debugMeta = {
                 period: `${args.startDate || defaultStart} a ${args.endDate || defaultEnd}`,
                 filters: debugFilters,
@@ -297,9 +431,8 @@ async function executeToolCall(name, args) {
             
             let frontendPayload = [];
 
-            // --- SE TIVER GROUP BY (ANALÍTICO) ---
             if (args.groupBy) {
-                let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; // default day
+                let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; 
                 if (args.groupBy === 'seller') dimension = "ibetcplepg.nomepg";
                 if (args.groupBy === 'line') dimension = `(CASE 
                         WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
@@ -312,7 +445,7 @@ async function executeToolCall(name, args) {
                 if (args.groupBy === 'seller') joinExtra = "INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG";
 
                 let aggQuery = `
-                    ${SQL_QUERIES.BASE_CTE}
+                    ${BASE_CTE}
                     SELECT TOP 50
                         ${dimension} as 'Label',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido'
@@ -325,12 +458,11 @@ async function executeToolCall(name, args) {
                 
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-
                 aiPayload.top_5_grupos = aggResult.recordset.slice(0, 5);
+
             } else {
-                // --- MODO DETALHADO (FRONTEND) ---
                 let detailQuery = `
-                    ${SQL_QUERIES.BASE_CTE}
+                    ${BASE_CTE}
                     SELECT TOP 50 
                         ibetpdd.DATEMSDOCPDD AS 'Data', ibetcplepg.nomepg AS 'Nome Vendedor',
                         SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido'
@@ -348,7 +480,7 @@ async function executeToolCall(name, args) {
             return {
                 ai_response: aiPayload,
                 frontend_data: frontendPayload,
-                debug_meta: debugMeta // Envia metadados para UI
+                debug_meta: debugMeta 
             };
         }
 
@@ -388,7 +520,6 @@ async function runChatAgent(userMessage, history = []) {
             const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
             
             if (toolResult && toolResult.frontend_data) {
-                // Passa os dados e o metadado de debug para o frontend
                 dataForFrontend = { 
                     samples: toolResult.frontend_data,
                     debugMeta: toolResult.debug_meta 
@@ -436,17 +567,25 @@ app.post('/api/v1/chat', async (req, res) => {
         let formattedData = null;
         if (response.data && response.data.samples) {
             const rows = response.data.samples;
+            
+            // Lógica para diferenciar tipos de dados (Vendas vs Visitas vs Oportunidades)
+            // Se tiver 'DataVisita', é visita.
+            const isVisit = rows[0]?.['DataVisita'] !== undefined;
+            const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
+
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],
-                recentTransactions: rows.map((r, i) => ({
+                recentTransactions: isVisit || isOpp ? [] : rows.map((r, i) => ({
                     id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], 
                     seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados'
                 })),
-                debugMeta: response.data.debugMeta // Repassa debugMeta
+                visits: isVisit ? rows : [],
+                opportunities: isOpp ? rows : [],
+                debugMeta: response.data.debugMeta 
             };
         }
         res.json({ text: response.text, data: formattedData });
@@ -482,4 +621,4 @@ async function sendWhatsappMessage(to, text, session) {
     } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V-Strict-Join running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V-Routes-Opp running on ${PORT}`));

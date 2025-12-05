@@ -1,6 +1,6 @@
 import React from 'react';
 import { SalesSummary } from '../types';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 interface DashboardProps {
   data: SalesSummary | null;
@@ -14,98 +14,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
       <div className="flex flex-col items-center justify-center h-full text-gray-400 p-8 text-center border-2 border-dashed border-gray-300 rounded-xl bg-gray-50">
         <i className="fas fa-chart-pie text-6xl mb-4 text-gray-300"></i>
         <h3 className="text-xl font-semibold">Aguardando Dados</h3>
-        <p className="text-sm mt-2">Peça ao agente para buscar dados de vendas, rotas ou oportunidades.</p>
-        <p className="text-xs mt-4 text-gray-500">Ex: "Minha rota de hoje" ou "Oportunidades do cliente X"</p>
+        <p className="text-sm mt-2">Peça ao agente para buscar dados de vendas para visualizar as métricas aqui.</p>
+        <p className="text-xs mt-4 text-gray-500">Ex: "Mostre as vendas do Carlos esta semana"</p>
       </div>
     );
   }
 
-  // MODO VISUALIZAÇÃO DE ROTA (VISITAS)
-  if (data.visits && data.visits.length > 0) {
-      const firstVisit = data.visits[0];
-      return (
-        <div className="flex flex-col h-full animate-fade-in">
-             <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4 rounded shadow-sm">
-                <h3 className="font-bold text-blue-800 flex items-center gap-2">
-                    <i className="fas fa-map-marker-alt"></i> Rota de Visitas
-                </h3>
-                <p className="text-xs text-blue-600">
-                    Vendedor: <strong>{firstVisit.NomeVendedor} ({firstVisit.CodVend})</strong> | Data: <strong>{new Date(firstVisit.DataVisita).toLocaleDateString('pt-BR')}</strong>
-                </p>
-             </div>
-             
-             <div className="flex-1 overflow-auto bg-white rounded shadow">
-                 <table className="w-full text-sm text-left">
-                     <thead className="bg-gray-100 text-gray-600 sticky top-0 uppercase text-xs">
-                         <tr>
-                             <th className="p-3">ID Cliente</th>
-                             <th className="p-3">Razão Social</th>
-                             <th className="p-3">Dia</th>
-                             <th className="p-3">Periodicidade</th>
-                         </tr>
-                     </thead>
-                     <tbody className="divide-y divide-gray-100">
-                         {data.visits.map((v, idx) => (
-                             <tr key={idx} className="hover:bg-blue-50 transition">
-                                 <td className="p-3 font-mono text-gray-500">{v.CodCliente}</td>
-                                 <td className="p-3 font-medium text-gray-800">{v.RazaoSocial}</td>
-                                 <td className="p-3 text-gray-600">{v.DiaSemana || '-'}</td>
-                                 <td className="p-3 text-xs">
-                                     <span className="bg-gray-200 px-2 py-1 rounded-full text-gray-700">{v.Periodicidade}</span>
-                                 </td>
-                             </tr>
-                         ))}
-                     </tbody>
-                 </table>
-             </div>
-             {renderDebugFooter(data)}
-        </div>
-      );
-  }
-
-  // MODO VISUALIZAÇÃO DE OPORTUNIDADES (GAP)
-  if (data.opportunities && data.opportunities.length > 0) {
-    return (
-      <div className="flex flex-col h-full animate-fade-in">
-           <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mb-4 rounded shadow-sm">
-              <h3 className="font-bold text-amber-800 flex items-center gap-2">
-                  <i className="fas fa-lightbulb"></i> Oportunidades de Venda (Positivação)
-              </h3>
-              <p className="text-xs text-amber-700">
-                  Produtos que o cliente comprava (últimos 4 meses) mas <strong>não comprou este mês</strong>.
-              </p>
-           </div>
-           
-           <div className="flex-1 overflow-auto bg-white rounded shadow">
-               <table className="w-full text-sm text-left">
-                   <thead className="bg-gray-100 text-gray-600 sticky top-0 uppercase text-xs">
-                       <tr>
-                           <th className="p-3">Cód</th>
-                           <th className="p-3">Produto</th>
-                           <th className="p-3">Grupo</th>
-                           <th className="p-3 text-right">Ação</th>
-                       </tr>
-                   </thead>
-                   <tbody className="divide-y divide-gray-100">
-                       {data.opportunities.map((op, idx) => (
-                           <tr key={idx} className="hover:bg-amber-50 transition">
-                               <td className="p-3 font-mono text-gray-500">{op.cod_produto}</td>
-                               <td className="p-3 font-medium text-gray-800">{op.descricao}</td>
-                               <td className="p-3 text-gray-500 text-xs">{op.grupo}</td>
-                               <td className="p-3 text-right">
-                                   <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">OFERECER</span>
-                               </td>
-                           </tr>
-                       ))}
-                   </tbody>
-               </table>
-           </div>
-           {renderDebugFooter(data)}
-      </div>
-    );
-  }
-
-  // MODO PADRÃO (VENDAS)
   return (
     <div className="flex flex-col h-full animate-fade-in">
       <div className="space-y-6 flex-1 overflow-y-auto">
@@ -190,31 +104,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
         </div>
       </div>
 
-      {renderDebugFooter(data)}
+      {/* DEBUG META FOOTER */}
+      {data.debugMeta && (
+          <div className="mt-4 p-3 bg-slate-800 rounded text-slate-300 text-[10px] font-mono border-t-4 border-slate-600">
+              <div className="flex justify-between items-center mb-1">
+                  <span className="font-bold text-white uppercase"><i className="fas fa-terminal mr-1"></i> Metadados da Consulta</span>
+                  <span className="bg-slate-700 px-2 py-0.5 rounded text-white">{data.debugMeta.sqlLogic}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                  <div>
+                      <span className="text-slate-500">Período:</span> {data.debugMeta.period}
+                  </div>
+                  <div>
+                      <span className="text-slate-500">Filtros Ativos:</span> 
+                      {data.debugMeta.filters.length > 0 ? (
+                          <span className="ml-1 text-green-400">{data.debugMeta.filters.join(' | ')}</span>
+                      ) : (
+                          <span className="ml-1 text-gray-500">Nenhum</span>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };
-
-const renderDebugFooter = (data: SalesSummary) => (
-    data.debugMeta && (
-        <div className="mt-4 p-3 bg-slate-800 rounded text-slate-300 text-[10px] font-mono border-t-4 border-slate-600">
-            <div className="flex justify-between items-center mb-1">
-                <span className="font-bold text-white uppercase"><i className="fas fa-terminal mr-1"></i> Metadados da Consulta</span>
-                <span className="bg-slate-700 px-2 py-0.5 rounded text-white">{data.debugMeta.sqlLogic}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-                <div>
-                    <span className="text-slate-500">Período:</span> {data.debugMeta.period}
-                </div>
-                <div>
-                    <span className="text-slate-500">Filtros Ativos:</span> 
-                    {data.debugMeta.filters.length > 0 ? (
-                        <span className="ml-1 text-green-400">{data.debugMeta.filters.join(' | ')}</span>
-                    ) : (
-                        <span className="ml-1 text-gray-500">Nenhum</span>
-                    )}
-                </div>
-            </div>
-        </div>
-    )
-);

@@ -2,20 +2,25 @@
 import { MOCK_SALES_DB } from '../constants';
 import { FilterParams, SalesSummary } from '../types';
 
-// Lógica de URL Automática (Zero Config)
+const getEnvVar = (key: string) => {
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env) return import.meta.env[key];
+  return undefined;
+};
+
+// Lógica atualizada para pegar do LocalStorage
 const getDockerUrl = () => {
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    const port = '8085';
-    return `${protocol}//${hostname}:${port}/api/v1/query`;
+    const stored = localStorage.getItem('salesbot_query_url');
+    if (stored) return stored;
+    return getEnvVar('VITE_API_URL') || "http://localhost:8085/api/v1/query";
 }
 
-// Fallback seguro se a variável não existir
-const USE_MOCK_DATA = import.meta.env?.VITE_USE_MOCK === 'true';
+const rawUseMock = getEnvVar('VITE_USE_MOCK');
+const USE_MOCK_DATA = rawUseMock === 'false' ? false : true; 
 
 export const querySalesData = async (params: FilterParams): Promise<SalesSummary> => {
   const DOCKER_API_URL = getDockerUrl();
-  console.log(`[DockerClient] API URL (Auto): ${DOCKER_API_URL}`);
+  console.log(`[DockerClient] API URL: ${DOCKER_API_URL}`);
 
   if (!USE_MOCK_DATA) {
     try {
@@ -32,8 +37,9 @@ export const querySalesData = async (params: FilterParams): Promise<SalesSummary
     }
   }
 
-  // --- MOCK FALLBACK ---
+  // --- MOCK FALLBACK (Código original mantido para fallback) ---
   let filtered = [...MOCK_SALES_DB];
+  // ... (restante do código mock mantido igual) ...
   return {
     totalRevenue: 0,
     totalOrders: 0,

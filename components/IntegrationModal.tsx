@@ -1,26 +1,59 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface IntegrationModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type Tab = 'qrcode'; // Simplificado para focar no WhatsApp
-type ConnectionType = 'gateway';
+type Tab = 'qrcode' | 'api' | 'infra';
+type ConnectionType = 'gateway' | 'official';
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
+  const [activeTab, setActiveTab] = useState<Tab>('infra'); // Padrão Infra para configurar IP
+  const [connectionType, setConnectionType] = useState<ConnectionType>('gateway');
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // WhatsApp Gateway States (Auto Detect IP)
+  // Infra states - Auto-detecta o IP da máquina atual
+  const [dockerApiUrl, setDockerApiUrl] = useState(`http://${window.location.hostname}:8085`); 
+
+  // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
   const [sessionName, setSessionName] = useState('vendas_bot');
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
 
+  // Carregar configurações salvas ao abrir
+  useEffect(() => {
+    if (isOpen) {
+        const savedApi = localStorage.getItem('salesbot_api_url');
+        if (savedApi) {
+            // Remove o /api/v1/chat para mostrar só a base
+            const baseUrl = savedApi.split('/api/v1')[0];
+            setDockerApiUrl(baseUrl);
+        } else {
+            // Se não tiver salvo, garante que usa o hostname atual
+            setDockerApiUrl(`http://${window.location.hostname}:8085`);
+        }
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const handleSaveInfra = () => {
+    // Salva a URL base no localStorage para o app usar
+    const cleanUrl = dockerApiUrl.replace(/\/$/, ''); // remove barra final se tiver
+    localStorage.setItem('salesbot_api_url', `${cleanUrl}/api/v1/chat`);
+    localStorage.setItem('salesbot_query_url', `${cleanUrl}/api/v1/query`);
+    
+    setIsLoading(true);
+    setTimeout(() => {
+      setIsLoading(false);
+      setIsConnected(true);
+      alert("Configuração Salva! O sistema agora tentará conectar neste endereço.");
+    }, 1000);
+  };
 
   const generateQrCode = async () => {
     setIsLoading(true);
@@ -64,7 +97,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique se o container 'whatsapp-gateway' está rodando.`);
+      setErrorMsg(`Falha: ${err.message}. Verifique o IP do gateway e se o container está rodando.`);
     } finally {
       setIsLoading(false);
     }
@@ -72,65 +105,109 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="bg-whatsapp-teal p-4 flex justify-between items-center">
+        <div className="bg-slate-900 p-4 flex justify-between items-center">
             <h2 className="text-white font-semibold flex items-center gap-2">
-                <i className="fab fa-whatsapp"></i> Conectar WhatsApp
+                <i className="fas fa-cog"></i> Configurações do Sistema
             </h2>
-            <button onClick={onClose} className="text-white/70 hover:text-white transition">
+            <button onClick={onClose} className="text-gray-400 hover:text-white transition">
                 <i className="fas fa-times text-xl"></i>
             </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 overflow-y-auto space-y-4">
-             <div className="bg-green-50 border border-green-200 p-3 rounded-lg">
-                <p className="text-xs text-green-800">
-                    A API Backend já está conectada automaticamente em <strong>{window.location.hostname}:8085</strong>.
-                    Use este painel apenas para ler o QR Code do WhatsApp.
-                </p>
-            </div>
+        {/* Tabs */}
+        <div className="flex border-b bg-gray-50">
+            <button 
+                onClick={() => setActiveTab('infra')}
+                className={`flex-1 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'infra' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
+                <i className="fas fa-server mr-2"></i> Infraestrutura
+            </button>
+            <button 
+                onClick={() => setActiveTab('qrcode')}
+                className={`flex-1 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'qrcode' ? 'border-whatsapp-dark text-whatsapp-dark bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
+                <i className="fab fa-whatsapp mr-2"></i> Conexão WhatsApp
+            </button>
+        </div>
 
-            <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
-                <input 
-                    type="text" 
-                    value={sessionName}
-                    onChange={(e) => setSessionName(e.target.value)}
-                    className="w-full border rounded p-2 text-sm focus:border-green-500 outline-none" 
-                    placeholder="Ex: vendas_bot"
-                />
-            </div>
-            
-            {errorMsg && (
-                <div className="p-3 bg-red-50 text-red-600 text-xs rounded border border-red-200">
-                   {errorMsg}
+        {/* Content */}
+        <div className="p-6 overflow-y-auto">
+            {activeTab === 'infra' && (
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                        <h4 className="text-blue-800 font-bold text-sm mb-1">Endereço da API (Docker)</h4>
+                        <p className="text-xs text-blue-600 mb-2">
+                           Detectamos que seu IP atual é <strong>{window.location.hostname}</strong>. Se estiver acessando de outro computador, este endereço deve funcionar.
+                        </p>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL da API</label>
+                        <input 
+                            type="text" 
+                            value={dockerApiUrl}
+                            onChange={(e) => setDockerApiUrl(e.target.value)}
+                            className="w-full border rounded p-2 text-sm font-mono text-gray-700 focus:border-blue-500 outline-none" 
+                        />
+                    </div>
+                    <button 
+                        onClick={handleSaveInfra}
+                        className="w-full py-2 bg-blue-600 text-white rounded font-semibold hover:bg-blue-700 transition"
+                    >
+                        Salvar Configuração
+                    </button>
                 </div>
             )}
 
-            <div className="flex flex-col items-center justify-center p-6 bg-gray-50 rounded border-2 border-dashed border-gray-300">
-                {!qrCodeData ? (
-                    <button 
-                        onClick={generateQrCode}
-                        disabled={isLoading}
-                        className="px-6 py-2 bg-whatsapp-light text-white font-bold rounded-full hover:bg-whatsapp-dark transition shadow-md flex items-center gap-2"
-                    >
-                        {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-qrcode"></i>}
-                        {isLoading ? 'Conectando...' : 'Gerar QR Code'}
-                    </button>
-                ) : (
-                    <div className="text-center animate-fade-in">
-                        <img src={qrCodeData} alt="QR Code" className="w-56 h-56 border shadow-sm mx-auto bg-white p-2" />
-                        <p className="text-sm mt-3 text-gray-600 font-medium">Abra o WhatsApp > Aparelhos Conectados > Conectar</p>
+            {activeTab === 'qrcode' && (
+                <div className="space-y-4">
+                     <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
+                        <p className="text-xs text-yellow-700">
+                            Certifique-se que o container <strong>whatsapp-gateway</strong> está rodando na porta 8082.
+                        </p>
                     </div>
-                )}
-            </div>
-            
-            <div className="text-center">
-                 <p className="text-[10px] text-gray-400">Gateway URL: {gatewayUrl}</p>
-            </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway</label>
+                         <input 
+                            type="text" 
+                            value={gatewayUrl}
+                            onChange={(e) => setGatewayUrl(e.target.value)}
+                            className="w-full border rounded p-2 text-sm mb-2" 
+                        />
+
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
+                        <input 
+                            type="text" 
+                            value={sessionName}
+                            onChange={(e) => setSessionName(e.target.value)}
+                            className="w-full border rounded p-2 text-sm" 
+                        />
+                    </div>
+                    
+                    {errorMsg && (
+                        <div className="p-3 bg-red-50 text-red-600 text-xs rounded border border-red-200">
+                           {errorMsg}
+                        </div>
+                    )}
+
+                    <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded border-2 border-dashed">
+                        {!qrCodeData ? (
+                            <button 
+                                onClick={generateQrCode}
+                                disabled={isLoading}
+                                className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2"
+                            >
+                                {isLoading ? 'Gerando...' : 'Gerar QR Code'}
+                            </button>
+                        ) : (
+                            <div className="text-center">
+                                <img src={qrCodeData} alt="QR Code" className="w-56 h-56 border shadow-sm" />
+                                <p className="text-xs mt-2 text-gray-500">Escaneie com o WhatsApp</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
       </div>
     </div>

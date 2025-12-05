@@ -8,17 +8,13 @@ WORKDIR /app
 RUN npm config set strict-ssl false
 RUN npm config set registry https://registry.npmjs.org/
 
-# Copia tudo primeiro
+COPY package.json ./
+
+# Instala dependências de forma limpa, ignorando o lockfile antigo para evitar conflitos
+RUN npm install --legacy-peer-deps --no-audit --no-package-lock
+
 COPY . .
 
-# LIMPEZA CRÍTICA: Remove node_modules e locks que podem ter vindo do Host (Windows/Mac)
-# Isso força o Docker a baixar tudo do zero para o ambiente Linux
-RUN rm -rf node_modules package-lock.json dist
-
-# Instalação Limpa
-RUN npm install --legacy-peer-deps --no-audit
-
-# Build
 RUN npm run build
 
 # Estágio 2: Nginx

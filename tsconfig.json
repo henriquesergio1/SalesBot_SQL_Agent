@@ -22,5 +22,5 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["./**/*.ts", "./**/*.tsx", "vite-env.d.ts"],
-  "exclude": ["node_modules", "dist", "api_server.js"]
+  "exclude": ["node_modules", "dist", "api_server.js", "Dockerfile*", "*.txt"]
 }

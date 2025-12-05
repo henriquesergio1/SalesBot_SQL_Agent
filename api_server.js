@@ -45,6 +45,12 @@ HOJE É: ${today}.
 OBJETIVO:
 Ajudar vendedores com Metas, Vendas e **ROTA DE VISITAS**.
 
+REGRAS VISUAIS (MUITO IMPORTANTE):
+1. **SEMPRE** mostre o CÓDIGO/ID antes do nome para Vendedores, Clientes, Produtos e Supervisores.
+   - Formato Correto: "101 - Supermercado X", "502 - Carlos", "200 - Bombom Garoto".
+   - Formato ERRADO: "Supermercado X", "Carlos".
+   - NUNCA remova o ID que a ferramenta retornar.
+
 FERRAMENTAS (TOOLS):
 1. **get_scheduled_visits** (NOVA): Use quando perguntarem "Quais clientes visitar hoje?", "Minha rota", "Agenda".
    - Requer ID do Vendedor. Se não souber, pergunte ou use get_sales_team.
@@ -53,6 +59,7 @@ FERRAMENTAS (TOOLS):
    - Identifica produtos que o cliente comprava mas não comprou este mês.
 3. **query_sales_data**: Para totais de vendas e performance.
    - Use groupBy='product' para "Produtos mais vendidos".
+   - Use groupBy='customer' para "Melhores clientes".
    - Use groupBy='product_group' para "Grupos mais vendidos".
 4. **get_sales_team**: Para descobrir IDs de vendedores.
 5. **get_customer_base**: Para buscar IDs de clientes.
@@ -208,7 +215,7 @@ const SQL_QUERIES = {
         ORDER BY x.DataVisita
         OPTION (MAXRECURSION 1000);
     `,
-    // Query de Oportunidade: Produtos comprados nos ultimos 120 dias - Produtos comprados no mês atual
+    // Query de Oportunidade
     OPPORTUNITY_QUERY: `
         WITH Historico AS (
              SELECT DISTINCT I.CODCATITE
@@ -286,7 +293,7 @@ async function executeToolCall(name, args) {
             return result.recordset;
         }
 
-        // TOOL 4: ROTA DE VISITAS (NOVA)
+        // TOOL 4: ROTA DE VISITAS
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
             request.input('targetDate', sql.Date, date);
@@ -301,13 +308,13 @@ async function executeToolCall(name, args) {
             };
 
             return {
-                ai_response: summary, // IA recebe resumo
-                frontend_data: result.recordset, // Frontend recebe tabela completa
+                ai_response: summary, 
+                frontend_data: result.recordset,
                 debug_meta: { period: date, filters: [`Vendedor ${args.sellerId}`], sqlLogic: 'Rota de Visitas Complexa' }
             };
         }
 
-        // TOOL 5: OPORTUNIDADES (GAP ANALYSIS)
+        // TOOL 5: OPORTUNIDADES
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
@@ -319,7 +326,7 @@ async function executeToolCall(name, args) {
             };
         }
 
-        // TOOL 3: VENDAS (OTIMIZADO & CORRIGIDO DUPLICAÇÃO)
+        // TOOL 3: VENDAS (OTIMIZADO)
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -365,6 +372,14 @@ async function executeToolCall(name, args) {
             if (args.city || args.groupBy === 'city') {
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET ";
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD ";
+            }
+            // Join para Supervisor se necessário
+            if (args.groupBy === 'supervisor') {
+                dynamicJoins += `
+                    INNER JOIN flexx10071188.dbo.ibetcplepg VENDEDOR ON ibetpdd.CODMTCEPG = VENDEDOR.CODMTCEPG
+                    INNER JOIN flexx10071188.dbo.IBETSBN SBN ON VENDEDOR.CODMTCEPG = SBN.codmtcepgsbn
+                    INNER JOIN flexx10071188.dbo.ibetcplepg SUP ON SBN.CODMTCEPGRPS = SUP.CODMTCEPG AND SUP.TPOEPG = 'S'
+                `;
             }
 
             if (args.line) {
@@ -436,13 +451,13 @@ async function executeToolCall(name, args) {
             if (args.groupBy) {
                 let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; 
                 if (args.groupBy === 'seller') dimension = "CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg)";
+                if (args.groupBy === 'supervisor') dimension = "CONCAT(SBN.CODMTCEPGRPS, ' - ', SUP.nomepg)";
                 if (args.groupBy === 'line') dimension = `(CASE 
                         WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
                         WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
                         ELSE IBETDOMLINNTE.DESLINNTE 
                     END)`;
                 if (args.groupBy === 'customer') dimension = "CONCAT(IBETCET.CODCET, ' - ', IBETCET.NOMRAZSCLCET)";
-                // Padrão COD - NOME para Produtos, Grupos e Familias
                 if (args.groupBy === 'product') dimension = "CONCAT(IBETCATITE.CODCATITE, ' - ', IBETCATITE.DESCATITE)";
                 if (args.groupBy === 'product_group') dimension = "CONCAT(IBETGPOITE.CODGPOITE, ' - ', IBETGPOITE.DESGPOITE)";
                 if (args.groupBy === 'product_family') dimension = "CONCAT(IBETFAMITE.CODFAMITE, ' - ', IBETFAMITE.DESFAMITE)";
@@ -466,7 +481,8 @@ async function executeToolCall(name, args) {
                 
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-                aiPayload.top_5_grupos = aggResult.recordset.slice(0, 5);
+                // Agora envia Top 10 para IA (antes era 5)
+                aiPayload.top_grupos = aggResult.recordset.slice(0, 10);
 
             } else {
                 let detailQuery = `

@@ -28,104 +28,92 @@ const sqlConfig = {
 // Validação de API Key na Inicialização
 const apiKey = process.env.API_KEY || '';
 
-// --- LOG DE DIAGNÓSTICO DE SEGURANÇA ---
 if (apiKey && !apiKey.includes('COLE_SUA')) {
     console.log("==================================================");
-    console.log(`🔑 API Key Carregada: ${apiKey.substring(0, 10)}... (Verifique se bate com a nova)`);
+    console.log(`🔑 API Key Carregada: ${apiKey.substring(0, 10)}...`);
     console.log("==================================================");
-}
-
-if (!apiKey || apiKey.includes('COLE_SUA')) {
-    console.error("==================================================");
-    console.error("ERRO CRÍTICO: API_KEY não configurada corretamente.");
-    console.error("Edite o docker-compose.yml e cole sua chave do Google AI Studio.");
-    console.error("==================================================");
 }
 
 const aiClient = new GoogleGenAI({ apiKey: apiKey });
 
-// Instrução do Sistema atualizada para Multi-Tools
 const getSystemInstruction = () => {
     const today = new Date().toISOString().split('T')[0];
     return `
-Você é o "SalesBot", um auditor de dados comerciais conectado ao SQL Server.
+Você é o "SalesBot", um analista de inteligência de negócios SQL Expert.
 HOJE É: ${today}.
 
-DIRETRIZES DE SEGURANÇA E VERACIDADE (CRÍTICO):
-1. **ZERO ALUCINAÇÃO**: NUNCA invente, adivinhe ou deduza nomes de vendedores ou clientes. 
-2. **BUSCA EXATA**: Se o usuário perguntar "Quem é o ID 106?", você OBRIGATORIAMENTE deve usar a tool 'get_sales_team' passando o argumento 'id: 106'.
-3. **RESPOSTA NEGATIVA**: Se a tool retornar uma lista vazia, responda: "Não encontrei nenhum registro com o ID informado". NÃO tente chutar um nome próximo.
-4. **HIERARQUIA**: A verdade absoluta está no retorno das ferramentas. Se a ferramenta diz que o ID 106 é "Maria", então é "Maria".
+ESTRATÉGIA DE ANÁLISE (IMPORTANTE):
+1. **PARA TOTAIS E COMPARAÇÕES (BIG DATA)**: 
+   - SEMPRE use o parâmetro 'groupBy' na tool 'query_sales_data'.
+   - Ex: "Vendas por vendedor em 2023" -> use { groupBy: 'seller', startDate: '2023-01-01', ... }
+   - Isso permite processar milhões de linhas instantaneamente.
 
-TERMINOLOGIA DE NEGÓCIO (IMPORTANTE):
-- **"SETOR"** = **ID DO VENDEDOR** (Código). Ex: "Setor 502" significa "Vendedor ID 502".
-- **"ROTA"** = Geralmente refere-se à localização ou cadastro do cliente.
+2. **COMPARAÇÃO DE PERÍODOS (YoY/MoM)**:
+   - Se o usuário pedir "Compare 2023 com 2024", chame a tool DUAS vezes.
+   - Chamada 1: totais de 2023.
+   - Chamada 2: totais de 2024.
+   - Depois calcule a diferença percentual na sua resposta textual.
 
-SUAS FERRAMENTAS:
-1. **get_sales_team**: Use para descobrir identidade de funcionários.
-   - Parâmetros: 'id' (para busca exata de código/setor) ou 'searchName' (para busca de texto).
-   - Ex: "Quem é o setor 106?" -> Chame get_sales_team({ id: 106 }).
+TERMINOLOGIA:
+- **"SETOR"** = **ID DO VENDEDOR** (Ex: 502).
+- **"ROTA"** = Localização/Cidade.
 
-2. **get_customer_base**: Use para buscar informações cadastrais de clientes.
-   
-3. **query_sales_data**: Use APENAS para buscar VENDAS e VALORES.
-   - Ex: "Vendas do setor 502" -> Chame query_sales_data({ sellerId: 502 }).
-
-REGRAS DE DATA:
-- Se o usuário disser "últimos X dias", calcule as datas com base em ${today}.
-- Se não houver data, assuma os últimos 30 dias na query de vendas.
+TOOLS:
+1. **get_sales_team**: Identificar IDs de funcionários.
+2. **get_customer_base**: Buscar dados cadastrais de clientes.
+3. **query_sales_data**: Ferramenta Principal.
+   - Use 'groupBy' para relatórios (month, seller, supervisor, city, product_group).
+   - Deixe 'groupBy' vazio APENAS se precisar listar pedidos individuais (limitado a 50 linhas).
 `;
 };
 
 // ==================================================================================
-// 2. DEFINIÇÃO DAS FERRAMENTAS (TOOLS)
+// 2. DEFINIÇÃO DAS FERRAMENTAS
 // ==================================================================================
 
-// Tool 1: Equipe de Vendas (Atualizada com ID)
 const salesTeamTool = {
     name: "get_sales_team",
-    description: "Consulta a tabela de funcionários para identificar Vendedores (Setores), Supervisores ou Motoristas pelo ID ou Nome.",
+    description: "Consulta funcionários (Vendedores/Setores, Supervisores). Use para descobrir IDs.",
     parameters: {
         type: "OBJECT",
         properties: {
-            id: { type: "INTEGER", description: "Código exato do funcionário/setor (Ex: 106)" },
-            searchName: { type: "STRING", description: "Nome parcial para filtrar" },
-            role: { type: "STRING", description: "Filtrar por cargo" }
+            id: { type: "INTEGER", description: "Código exato (Setor/ID)" },
+            searchName: { type: "STRING" },
+            role: { type: "STRING" }
         }
     }
 };
 
-// Tool 2: Base de Clientes
 const customerBaseTool = {
     name: "get_customer_base",
-    description: "Busca cadastro de clientes (Razão Social, Cidade, Rede, Canal).",
+    description: "Busca cadastro de clientes.",
     parameters: {
         type: "OBJECT",
         properties: {
-            searchTerm: { type: "STRING", description: "Nome do cliente, Razão Social ou Cidade" },
-            limit: { type: "INTEGER", description: "Limite de resultados (Padrão 20)" }
+            searchTerm: { type: "STRING" },
+            limit: { type: "INTEGER" }
         },
         required: ["searchTerm"]
     }
 };
 
-// Tool 3: Vendas (A query pesada)
 const querySalesTool = {
   name: "query_sales_data",
-  description: "Busca transações de vendas, valores, produtos e devolucões.",
+  description: "Busca vendas. Use 'groupBy' para totais agregados (Rápido) ou deixe vazio para detalhes (Lento).",
   parameters: {
     type: "OBJECT",
     properties: {
       startDate: { type: "STRING", description: "YYYY-MM-DD" },
       endDate: { type: "STRING", description: "YYYY-MM-DD" },
-      sellerName: { type: "STRING", description: "Nome do Vendedor" },
-      sellerId: { type: "INTEGER", description: "Código/ID do Vendedor (Também chamado de 'Setor')" },
-      supervisorName: { type: "STRING" },
+      sellerId: { type: "INTEGER" },
       customerId: { type: "INTEGER" },
-      customerName: { type: "STRING" },
-      productName: { type: "STRING" },
       status: { type: "STRING", description: "'VENDA' ou 'DEVOLUÇÃO'" },
-      generalSearch: { type: "STRING", description: "Busca genérica" }
+      generalSearch: { type: "STRING" },
+      groupBy: { 
+          type: "STRING", 
+          description: "Agrupar por: 'month', 'seller', 'supervisor', 'city', 'product_group', 'line'",
+          enum: ["month", "seller", "supervisor", "city", "product_group", "line"]
+      }
     },
   },
 };
@@ -137,46 +125,40 @@ const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySa
 // ==================================================================================
 
 const SQL_QUERIES = {
-    // 1. Equipe (LEFT JOIN para garantir que traga todos, mesmo sem supervisor)
     SALES_TEAM: `
         SELECT DISTINCT 
             V.CODMTCEPG as 'id',
             V.nomepg as 'nome',
-            CASE 
-                WHEN V.TPOEPG = 'V' THEN 'VENDEDOR'
-                WHEN V.TPOEPG = 'S' THEN 'SUPERVISOR'
-                WHEN V.TPOEPG = 'M' THEN 'MOTORISTA'
-                ELSE V.TPOEPG 
-            END as 'cargo',
-            ISNULL(S.nomepg, 'SEM SUPERVISOR') as 'supervisor_nome',
-            S.CODMTCEPG as 'supervisor_id'
+            V.TPOEPG as 'tipo',
+            S.nomepg as 'supervisor'
         FROM flexx10071188.dbo.ibetcplepg V
         LEFT JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn
         LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
         WHERE V.TPOEPG IN ('V', 'S', 'M')
     `,
 
-    // 2. Clientes
     CUSTOMERS: `
-        SELECT TOP 50
-            C.CODCET as 'id',
-            C.NOMRAZSCLCET as 'razao_social',
-            City.descdd as 'cidade',
-            City.coduf_ as 'uf',
-            F.DESFAD as 'canal',
-            R.desrde as 'rede'
+        SELECT TOP 20 C.CODCET as 'id', C.NOMRAZSCLCET as 'nome', City.descdd as 'cidade'
         FROM flexx10071188.dbo.IBETCET C
         LEFT JOIN flexx10071188.dbo.ibetedrcet E ON C.CODCET = E.CODCET
         LEFT JOIN flexx10071188.dbo.ibetcdd City ON E.CODUF_ = City.CODUF_ AND E.CODCDD = City.CODCDD
-        LEFT JOIN flexx10071188.dbo.IBETFAD F ON C.CODFAD = F.CODFAD
-        LEFT JOIN flexx10071188.dbo.IBETCADRDE R ON C.CODRDE = R.CODRDE
         WHERE C.NOMRAZSCLCET LIKE @search OR City.descdd LIKE @search
     `,
 
-    // 3. Vendas (Principal)
-    SALES_DATA: `
+    // CTE BASE (Reutilizável)
+    BASE_CTE: `
         WITH pedidos_filtrados AS (
-            SELECT *
+            SELECT 
+                ibetpdd.DATEMSDOCPDD,
+                ibetpdd.CODPDD,
+                ibetpdd.NUMDOCPDD,
+                ibetpdd.INDSTUMVTPDD,
+                ibetpdd.CODCNDPGTRVD,
+                ibetpdd.CODCET,
+                ibetpdd.CODMTCEPG,
+                ibetpdd.CODMTV,
+                ibetpdd.CODORIPDD,
+                ibetpdd.codvec
             FROM flexx10071188.dbo.ibetpdd
             WHERE 
                 DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate
@@ -184,47 +166,6 @@ const SQL_QUERIES = {
                 AND NUMDOCPDD <> 0
                 AND CODCNDPGTRVD NOT IN (9998, 9999)
         )
-        SELECT 
-            ibetpdd.DATEMSDOCPDD AS 'Data',
-            ibetpdd.CODPDD AS 'Pedido',
-            ibetpdd.NUMDOCPDD AS 'NF',
-            SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
-            IBETITEPDD.CODCATITE AS 'Item',
-            IBETCATITE.DESCATITE AS 'Item Descrição',
-            IBETGPOITE.DESGPOITE AS 'Grupo',
-            IBETITEPDD.QTDITEPDD AS 'Quantidade',
-            ibetpdd.CODCET AS 'Sold',
-            IBETCET.NOMRAZSCLCET AS 'Razao Social',
-            IBETCDD.descdd AS 'Cidade',
-            ibetpdd.CODMTCEPG AS 'Vendedor',
-            ibetcplepg.nomepg AS 'Nome Vendedor',
-            SUP.nomepg AS 'Nome Supervisor',
-            CASE WHEN ibetpdd.INDSTUMVTPDD = 1 THEN 'VENDA' ELSE 'DEVOLUÇÃO' END AS 'Status'
-        FROM pedidos_filtrados ibetpdd
-        INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
-        INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
-        INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE
-        INNER JOIN flexx10071188.dbo.IBETFAMITE IBETFAMITE ON IBETCATITE.CODFAMITE = IBETFAMITE.CODFAMITE AND IBETFAMITE.CODGPOITE = IBETCATITE.CODGPOITE
-        INNER JOIN flexx10071188.dbo.IBETMIXITE IBETMIXITE ON IBETCATITE.CODMIXITE = IBETMIXITE.CODMIXITE
-        INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
-        INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI
-        INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD
-        LEFT JOIN flexx10071188.dbo.IBETCADRDE IBETCADRDE ON IBETCET.CODRDE = IBETCADRDE.CODRDE
-        INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
-        INNER JOIN flexx10071188.dbo.IBETSBN IBETSBN ON ibetcplepg.CODMTCEPG = IBETSBN.codmtcepgsbn
-        INNER JOIN flexx10071188.dbo.ibetcplepg SUP ON SUP.TPOEPG = 'S' AND IBETSBN.CODMTCEPGRPS = SUP.CODMTCEPG
-        INNER JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
-        INNER JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
-        INNER JOIN flexx10071188.dbo.ibetcndpgt ibetcndpgt ON ibetpdd.CODCNDPGTRVD = ibetcndpgt.CODCNDPGT
-        INNER JOIN flexx10071188.dbo.IBETTPLPDRVEC IBETTPLPDRVEC ON ibetpdd.codvec = IBETTPLPDRVEC.codvec
-        INNER JOIN flexx10071188.dbo.ibetcplepg motoristas ON IBETTPLPDRVEC.CODMTCEPG = motoristas.CODMTCEPG AND motoristas.tpoepg = 'M'
-        LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
-        LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
-        LEFT JOIN flexx10071188.dbo.ibetmtv ibetmtv ON ibetpdd.CODMTV = ibetmtv.CODMTV AND ibetmtv.CODTPOMTV = 1
-        LEFT JOIN flexx10071188.dbo.IBETDOMORIPDDAUT IBETDOMORIPDDAUT ON ibetpdd.CODORIPDD = IBETDOMORIPDDAUT.codoripdd
-        LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
-        
-        ORDER BY ibetpdd.DATEMSDOCPDD DESC
     `
 };
 
@@ -234,45 +175,30 @@ const SQL_QUERIES = {
 
 async function executeToolCall(name, args) {
     console.log(`[ToolExecutor] Executing ${name}`, args);
+    let pool;
     try {
-        let pool = await sql.connect(sqlConfig);
+        pool = await sql.connect(sqlConfig);
         const request = pool.request();
 
-        // --- TOOL 1: SALES TEAM ---
         if (name === 'get_sales_team') {
             const result = await request.query(SQL_QUERIES.SALES_TEAM);
             let team = result.recordset;
-            
-            // Filtro por ID exato (Prioridade Máxima)
-            if (args.id) {
-                team = team.filter(t => t.id == args.id);
-            }
-            // Filtro por Nome
+            if (args.id) team = team.filter(t => t.id == args.id);
             else if (args.searchName) {
                 const term = args.searchName.toLowerCase();
-                team = team.filter(t => 
-                    t.nome.toLowerCase().includes(term) || 
-                    (t.supervisor_nome && t.supervisor_nome.toLowerCase().includes(term))
-                );
+                team = team.filter(t => t.nome.toLowerCase().includes(term));
             }
-            
-            if (args.role) {
-                team = team.filter(t => t.cargo.toUpperCase() === args.role.toUpperCase());
-            }
-            
-            if (team.length === 0) return { message: "Nenhum funcionário encontrado com esses critérios. Verifique o ID." };
-            return team;
+            if (team.length === 0) return { message: "Nenhum funcionário encontrado." };
+            return team.slice(0, 15);
         }
 
-        // --- TOOL 2: CUSTOMERS ---
         if (name === 'get_customer_base') {
-            if (!args.searchTerm) return { error: "searchTerm é obrigatório" };
+            if (!args.searchTerm) return { error: "Falta searchTerm" };
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
             const result = await request.query(SQL_QUERIES.CUSTOMERS);
             return result.recordset;
         }
 
-        // --- TOOL 3: SALES DATA ---
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -283,127 +209,200 @@ async function executeToolCall(name, args) {
             request.input('startDate', sql.Date, args.startDate || defaultStart);
             request.input('endDate', sql.Date, args.endDate || defaultEnd);
 
-            const result = await request.query(SQL_QUERIES.SALES_DATA);
+            // ==================================================================
+            // MODO ANALÍTICO (GROUP BY) - ALTA PERFORMANCE
+            // ==================================================================
+            if (args.groupBy) {
+                let dimensionColumn = '';
+                let dimensionLabel = '';
+
+                // Mapeia o alias amigável para a coluna real SQL
+                switch(args.groupBy) {
+                    case 'month':
+                        dimensionColumn = "FORMAT(ibetpdd.DATEMSDOCPDD, 'yyyy-MM')";
+                        dimensionLabel = 'Mes';
+                        break;
+                    case 'seller':
+                        dimensionColumn = "ibetcplepg.nomepg";
+                        dimensionLabel = 'Vendedor';
+                        break;
+                    case 'supervisor':
+                        dimensionColumn = "SUP.nomepg";
+                        dimensionLabel = 'Supervisor';
+                        break;
+                    case 'city':
+                        dimensionColumn = "IBETCDD.descdd";
+                        dimensionLabel = 'Cidade';
+                        break;
+                    case 'product_group':
+                        dimensionColumn = "IBETGPOITE.DESGPOITE";
+                        dimensionLabel = 'Grupo';
+                        break;
+                    case 'line':
+                         dimensionColumn = "IBETDOMLINNTE.DESLINNTE";
+                         dimensionLabel = 'Linha';
+                         break;
+                    default:
+                        return { error: `Agrupamento '${args.groupBy}' não suportado.` };
+                }
+
+                // Query Agregada Otimizada
+                const aggQuery = `
+                    ${SQL_QUERIES.BASE_CTE}
+                    SELECT TOP 100
+                        ${dimensionColumn} as 'Label',
+                        SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor',
+                        COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
+                    FROM pedidos_filtrados ibetpdd
+                    INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
+                    INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
+                    INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE
+                    INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
+                    LEFT JOIN flexx10071188.dbo.IBETSBN IBETSBN ON ibetcplepg.CODMTCEPG = IBETSBN.codmtcepgsbn
+                    LEFT JOIN flexx10071188.dbo.ibetcplepg SUP ON SUP.TPOEPG = 'S' AND IBETSBN.CODMTCEPGRPS = SUP.CODMTCEPG
+                    LEFT JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
+                    LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET
+                    LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD
+                    LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE
+                    LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                    LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+                    
+                    GROUP BY ${dimensionColumn}
+                    ORDER BY 'Valor' DESC
+                `;
+
+                const result = await request.query(aggQuery);
+                return { 
+                    summary: {
+                        tipo_relatorio: `Vendas por ${dimensionLabel}`,
+                        registros: result.recordset
+                    }
+                };
+            }
+
+            // ==================================================================
+            // MODO DETALHADO (SELECT *) - APENAS SE GROUPBY FOR VAZIO
+            // ==================================================================
+            const detailQuery = `
+                ${SQL_QUERIES.BASE_CTE}
+                SELECT TOP 500 
+                    ibetpdd.DATEMSDOCPDD AS 'Data',
+                    ibetpdd.CODPDD AS 'Pedido',
+                    SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
+                    IBETITEPDD.QTDITEPDD AS 'Quantidade',
+                    IBETCET.NOMRAZSCLCET AS 'Razao Social',
+                    ibetcplepg.nomepg AS 'Nome Vendedor',
+                    IBETCATITE.DESCATITE AS 'Item Descrição'
+                FROM pedidos_filtrados ibetpdd
+                INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
+                INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
+                INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
+                INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+                
+                GROUP BY 
+                    ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, IBETITEPDD.QTDITEPDD,
+                    IBETCET.NOMRAZSCLCET, ibetcplepg.nomepg, IBETCATITE.DESCATITE
+                ORDER BY ibetpdd.DATEMSDOCPDD DESC
+            `;
+
+            const result = await request.query(detailQuery);
             let data = result.recordset;
 
-            // Filtros JS em Memória
-            data = data.filter(r => {
-                let match = true;
-                if (args.sellerName) match = match && String(r['Nome Vendedor']).toLowerCase().includes(args.sellerName.toLowerCase());
-                if (args.sellerId) match = match && r['Vendedor'] == args.sellerId;
-                if (args.customerId) match = match && r['Sold'] == args.customerId;
-                if (args.customerName) match = match && String(r['Razao Social']).toLowerCase().includes(args.customerName.toLowerCase());
-                if (args.productName) match = match && String(r['Item Descrição']).toLowerCase().includes(args.productName.toLowerCase());
-                if (args.status) match = match && String(r['Status']).toUpperCase() === args.status.toUpperCase();
-                
-                if (args.generalSearch) {
-                    const term = args.generalSearch.toLowerCase();
-                    const rowStr = Object.values(r).join(' ').toLowerCase();
-                    match = match && rowStr.includes(term);
-                }
-                return match;
-            });
+            // Filtros JavaScript (apenas para refinamento final)
+            if (args.sellerId) data = data.filter(r => r['Vendedor'] == args.sellerId); // Ajustar se necessário, mas no detalhado o SQL já fez o grosso
+            if (args.generalSearch) {
+                const term = args.generalSearch.toLowerCase();
+                data = data.filter(r => Object.values(r).join(' ').toLowerCase().includes(term));
+            }
 
-            // Resumo Estatístico para a IA
             return summarizeSalesData(data);
         }
 
-        return { error: "Ferramenta não encontrada" };
     } catch (sqlErr) {
         console.error("SQL Error:", sqlErr);
-        // Retorna o erro exato para a IA, assim ela pode avisar o usuário
-        return { 
-            error: "CRITICAL SQL ERROR", 
-            details: sqlErr.message, 
-            tip: "O administrador deve verificar as credenciais do banco no docker-compose.yml" 
-        };
+        return { error: `Erro SQL: ${sqlErr.message}` };
     }
 }
 
 function summarizeSalesData(data) {
-    if (!data || data.length === 0) return { count: 0, message: "Nenhum dado encontrado." };
+    if (!data || data.length === 0) return { message: "Nenhum dado encontrado." };
 
     const totalLiquido = data.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0);
-    const uniqueSellers = [...new Set(data.map(r => r['Nome Vendedor']))];
-    
-    // Amostra (Top 30 mais recentes)
-    const samples = data.slice(0, 30);
+    const totalQtd = data.reduce((acc, r) => acc + (r['Quantidade'] || 0), 0);
+    const sellers = [...new Set(data.map(r => r['Nome Vendedor']))];
+
+    const llmView = data.slice(0, 5).map(r => ({
+        Dt: new Date(r['Data']).toLocaleDateString(),
+        Vend: r['Nome Vendedor'],
+        Cli: r['Razao Social'],
+        Prod: r['Item Descrição'],
+        Val: Math.round(r['Valor Liquido'])
+    }));
 
     return {
-        count: data.length,
-        totalValue: totalLiquido,
-        uniqueSellers: uniqueSellers,
-        samples: samples,
-        note: "Mostrando apenas os 30 registros mais recentes para contexto. O valor total considera todos os registros."
+        summary: {
+            total_vendas_R$: totalLiquido,
+            total_itens: totalQtd,
+            vendedores_encontrados: sellers.length > 5 ? `${sellers.length} vendedores` : sellers,
+            contagem_registros: data.length,
+            nota: "Exibindo amostra de 5 registros."
+        },
+        llm_sample: llmView, 
+        full_data_frontend: data.slice(0, 100)
     };
 }
 
 // ==================================================================================
-// 5. AGENTE CENTRAL (CHAT LOOP)
+// 5. AGENTE CENTRAL
 // ==================================================================================
 
 async function runChatAgent(userMessage, history = []) {
     if (!process.env.API_KEY || process.env.API_KEY.includes('COLE_SUA')) {
-        throw new Error("A API Key do Google Gemini não está configurada no Backend. Verifique o docker-compose.");
-    }
-
-    let chatHistory = [];
-    if (history && Array.isArray(history)) {
-        chatHistory = history
-            .filter(h => h.role === 'user' || h.role === 'model')
-            .map(h => ({
-                role: h.role === 'model' ? 'model' : 'user',
-                parts: [{ text: h.content }]
-            }));
+        throw new Error("API Key inválida.");
     }
 
     const chat = aiClient.chats.create({
         model: "gemini-2.5-flash",
         config: { systemInstruction: getSystemInstruction(), tools: tools },
-        history: chatHistory
+        history: history
     });
 
-    // Loop de Raciocínio (Max 5 turnos para evitar loop infinito)
     let currentMessage = userMessage;
     let finalResponse = "";
     let dataForFrontend = null;
 
-    // Primeiro envio
     let result = await chat.sendMessage({ message: currentMessage });
 
     for (let i = 0; i < 5; i++) {
         const parts = result.candidates?.[0]?.content?.parts || [];
         const functionCalls = parts.filter(p => p.functionCall);
-        
-        // Se houver texto, adiciona à resposta final
         const textPart = parts.find(p => p.text);
+        
         if (textPart) finalResponse += textPart.text;
-
-        // Se não houver chamadas de função, terminamos
         if (functionCalls.length === 0) break;
 
-        // Executa as funções
         const functionResponses = [];
         for (const call of functionCalls) {
             const fc = call.functionCall;
-            console.log(`[AI] Chamando Tool: ${fc.name}`, fc.args);
-            
             const toolResult = await executeToolCall(fc.name, fc.args);
             
-            // Se for sales data, guardamos para o frontend
-            if (fc.name === 'query_sales_data' && toolResult.samples) {
-                dataForFrontend = toolResult; // Simplificado para frontend
+            let payloadForAI = toolResult;
+            
+            if (toolResult && toolResult.full_data_frontend) {
+                dataForFrontend = { samples: toolResult.full_data_frontend }; 
+                payloadForAI = { ...toolResult };
+                delete payloadForAI.full_data_frontend; 
             }
 
             functionResponses.push({
                 functionResponse: {
                     name: fc.name,
-                    response: { result: toolResult }
+                    response: { result: payloadForAI } 
                 }
             });
         }
-
-        // Envia resultados de volta para a IA
         result = await chat.sendMessage({ message: functionResponses });
     }
 
@@ -411,41 +410,24 @@ async function runChatAgent(userMessage, history = []) {
 }
 
 // ==================================================================================
-// 6. ROTAS API
+// 6. ROTAS
 // ==================================================================================
 
-// Rota de Diagnóstico (Health Check)
 app.get('/api/v1/health', async (req, res) => {
-    let sqlStatus = 'disconnected';
-    let sqlError = null;
-
     try {
         const pool = await sql.connect(sqlConfig);
         await pool.request().query('SELECT 1');
-        sqlStatus = 'connected';
+        res.json({ status: 'online', sql: 'connected', ai: 'ok' });
     } catch (e) {
-        sqlStatus = 'error';
-        sqlError = e.message;
-        console.error("Health Check SQL Failed:", e.message);
+        res.json({ status: 'online', sql: 'error', error: e.message });
     }
-
-    const apiKeyStatus = (process.env.API_KEY && !process.env.API_KEY.includes('COLE_SUA')) ? 'ok' : 'missing';
-
-    res.json({
-        status: 'online',
-        sql: sqlStatus,
-        sqlError: sqlError,
-        ai: apiKeyStatus
-    });
 });
 
-// Rota WEB
 app.post('/api/v1/chat', async (req, res) => {
     try {
         const { message, history } = req.body;
         const response = await runChatAgent(message, history);
         
-        // Formatar dados para o Dashboard React se houver
         let formattedData = null;
         if (response.data && response.data.samples) {
             formattedData = formatForReact(response.data.samples);
@@ -453,96 +435,56 @@ app.post('/api/v1/chat', async (req, res) => {
 
         res.json({ text: response.text, data: formattedData });
     } catch (err) {
-        console.error("Erro Web Chat:", err);
-        // Retorna 500 mas com mensagem descritiva para o frontend mostrar
-        res.status(500).json({ text: `Erro no Servidor: ${err.message}` });
+        console.error("Chat Error:", err);
+        res.status(500).json({ error: err.message, text: `Erro: ${err.message}` });
     }
 });
 
-// Rota Query Direta (Compatibilidade)
-app.post('/api/v1/query', async (req, res) => {
-    try {
-        // Usa a ferramenta query_sales_data diretamente
-        const result = await executeToolCall('query_sales_data', req.body);
-        const formatted = formatForReact(result.samples || []);
-        res.json(formatted);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Webhook WhatsApp
-app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    const data = req.body;
-    // ... Lógica padrão de extração de mensagem ...
-    if (data.type !== 'message' && !data.data?.message) return res.json({ status: 'ignored' });
-
-    const messageData = data.data;
-    const sender = messageData?.key?.remoteJid;
-    const userText = messageData?.message?.conversation || messageData?.message?.extendedTextMessage?.text;
-    const instance = data.instance || 'vendas_bot';
-
-    if (!userText || !sender || sender.includes('@g.us')) return res.json({ status: 'ignored' });
-
-    console.log(`[WhatsApp] Msg de ${sender}: ${userText}`);
-
-    // Processa Assincronamente
-    (async () => {
-        try {
-            const response = await runChatAgent(userText, []);
-            await sendWhatsappMessage(sender, response.text, instance);
-        } catch (err) {
-            console.error("Erro WhatsApp:", err);
-            await sendWhatsappMessage(sender, `Erro Técnico: ${err.message}`, instance);
-        }
-    })();
-
-    res.json({ status: 'processing' });
-});
-
-// Helper: Formata para React (Gráficos)
+// Helper React
 function formatForReact(rows) {
-    if (!rows || rows.length === 0) return { totalRevenue: 0, totalOrders: 0, averageTicket: 0, byCategory: [], recentTransactions: [] };
-    
-    // Mapeamento simplificado das colunas vindas do SQL
-    const mapped = rows.map((r, i) => ({
-        id: r['Pedido'] || i,
-        date: r['Data'],
-        total: r['Valor Liquido'],
-        seller: r['Nome Vendedor'],
-        product: r['Item Descrição'],
-        category: r['Grupo']
-    }));
-
-    const total = mapped.reduce((acc, i) => acc + (i.total || 0), 0);
+    if (!rows) return null;
     return {
-        totalRevenue: total,
-        totalOrders: mapped.length,
-        averageTicket: total / (mapped.length || 1),
-        topProduct: mapped[0]?.product || 'N/A',
-        byCategory: [], // Simplificado
-        recentTransactions: mapped
+        totalRevenue: rows.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0),
+        totalOrders: rows.length,
+        averageTicket: 0,
+        topProduct: rows[0]?.['Item Descrição'] || 'N/A',
+        byCategory: [],
+        recentTransactions: rows.map((r, i) => ({
+            id: i, date: r['Data'], total: r['Valor Liquido'], seller: r['Nome Vendedor'], product: r['Item Descrição']
+        }))
     };
 }
 
-async function sendWhatsappMessage(to, text, session) {
-    const gatewayUrl = 'http://whatsapp-gateway:8080'; // Interno
-    const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
-    const number = to.replace('@s.whatsapp.net', '').replace('@c.us', '');
+// Webhook
+app.post('/api/v1/whatsapp/webhook', async (req, res) => {
+    const data = req.body;
+    const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
+    const sender = data.data?.key?.remoteJid;
+    const instance = data.instance || 'vendas_bot';
 
+    if (msg && sender && !sender.includes('@g.us')) {
+        console.log(`[WPP] ${sender}: ${msg}`);
+        runChatAgent(msg).then(resp => {
+            sendWhatsappMessage(sender, resp.text, instance);
+        }).catch(err => {
+            sendWhatsappMessage(sender, `Erro: ${err.message}`, instance);
+        });
+    }
+    res.json({ status: 'ok' });
+});
+
+async function sendWhatsappMessage(to, text, session) {
+    const gatewayUrl = 'http://whatsapp-gateway:8080'; 
+    const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
+    const number = to.replace('@s.whatsapp.net', '');
+    
     try {
         await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
-            body: JSON.stringify({
-                number: number,
-                options: { delay: 1200, presence: "composing" },
-                textMessage: { text: text }
-            })
+            body: JSON.stringify({ number, options: { delay: 1200 }, textMessage: { text } })
         });
-    } catch (e) {
-        console.error("Erro Gateway:", e.message);
-    }
+    } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot Multi-Tool Agent running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot Optimized running on ${PORT}`));

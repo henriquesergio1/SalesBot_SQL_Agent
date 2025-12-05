@@ -4,8 +4,9 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  define: {
-    // Expose environment variables to the code
-    'process.env': process.env
+  // Removido 'define: process.env' que causava erro de build
+  server: {
+    host: true, // Permite acesso externo
+    port: 80
   }
 });

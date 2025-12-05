@@ -1,10 +1,10 @@
-
 import { FilterParams, SalesSummary } from '../types';
 
 // Função para pegar URL da API Automaticamente
 const getDockerUrl = () => {
     const hostname = window.location.hostname;
     const protocol = window.location.protocol;
+    // Porta fixa 8085 definida no docker-compose
     return `${protocol}//${hostname}:8085/api/v1/query`;
 }
 

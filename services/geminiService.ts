@@ -1,13 +1,13 @@
-
 import { SalesSummary, ChatMessage } from "../types";
 
 // Função para pegar URL da API Automaticamente
 const getApiUrl = () => {
   // Estratégia Inteligente: Pega o mesmo IP/Domínio que está no navegador
-  // e apenas troca a porta para 8085 (Padrão do seu Docker)
+  // e apenas troca a porta para 8085 (Padrão do Docker Backend)
   const hostname = window.location.hostname;
   const protocol = window.location.protocol;
   
+  // Porta fixa 8085 definida no docker-compose
   return `${protocol}//${hostname}:8085/api/v1/chat`;
 };
 
@@ -63,18 +63,16 @@ export const sendMessageToAgent = async (
     const result = await response.json();
 
     if (!response.ok) {
-        // Agora capturamos a mensagem real do erro enviada pelo servidor (Ex: Login Failed)
         throw new Error(result.text || result.error || `Erro ${response.status}: ${response.statusText}`);
     }
 
     return {
       text: result.text,
-      data: result.data // Agora inclui debugMeta vindo do backend
+      data: result.data
     };
 
   } catch (error: any) {
     console.error("Erro ao comunicar com Backend:", error);
-    // Mensagem amigável para o chat
     return { 
       text: `🔴 **ERRO DE CONEXÃO**: ${error.message}. \n\nDICA: O sistema tentou conectar em ${API_URL}. Verifique se o container 'salesbot-api' está rodando.` 
     };

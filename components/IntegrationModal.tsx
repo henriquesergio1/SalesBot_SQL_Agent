@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 
 interface IntegrationModalProps {
@@ -8,7 +7,6 @@ interface IntegrationModalProps {
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
-  // Também detecta automaticamente o IP para o Gateway (assumindo porta 8082)
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
   const [sessionName, setSessionName] = useState('vendas_bot');
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
@@ -35,7 +33,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!createResponse.ok && createResponse.status !== 403) {
          const errData = await createResponse.json().catch(() => ({}));
          if (!JSON.stringify(errData).includes('already exists')) {
-             throw new Error(`Erro ao criar instância. Verifique se a porta 8082 está correta e o container rodando.`);
+             throw new Error(`Erro ao criar instância. Verifique se a porta 8082 está correta.`);
          }
       }
 
@@ -84,12 +82,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         <div className="p-6 overflow-y-auto space-y-4">
             
             <div className="bg-blue-50 border border-blue-200 p-3 rounded text-xs text-blue-700">
-                <i className="fas fa-info-circle mr-1"></i>
-                A conexão com a API de Dados e IA é automática (Porta 8085). Configure aqui apenas o WhatsApp.
+                <i className="fas fa-network-wired mr-1"></i>
+                API conectada automaticamente em: <strong>http://{window.location.hostname}:8085</strong>
             </div>
 
             <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway (Evolution API)</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway WhatsApp (Evolution)</label>
                  <input 
                     type="text" 
                     value={gatewayUrl}

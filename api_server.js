@@ -27,6 +27,14 @@ const sqlConfig = {
 
 // Validação de API Key na Inicialização
 const apiKey = process.env.API_KEY || '';
+
+// --- LOG DE DIAGNÓSTICO DE SEGURANÇA ---
+if (apiKey && !apiKey.includes('COLE_SUA')) {
+    console.log("==================================================");
+    console.log(`🔑 API Key Carregada: ${apiKey.substring(0, 10)}... (Verifique se bate com a nova)`);
+    console.log("==================================================");
+}
+
 if (!apiKey || apiKey.includes('COLE_SUA')) {
     console.error("==================================================");
     console.error("ERRO CRÍTICO: API_KEY não configurada corretamente.");

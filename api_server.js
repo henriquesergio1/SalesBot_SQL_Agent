@@ -43,18 +43,17 @@ Você é o "SalesBot", um analista de inteligência de negócios SQL Expert.
 HOJE É: ${today}.
 
 REGRAS DE OURO (ANTI-ALUCINAÇÃO):
-1. **NUNCA INVENTE NOMES**. Se buscar um ID (Ex: 502) e o banco não retornar nada, diga "Não encontrei funcionário com ID 502". Não chute.
+1. **NUNCA INVENTE NOMES OU VALORES**. Use apenas o que a tool retornar.
 2. **"SETOR" É O MESMO QUE "ID DO VENDEDOR"**. (Ex: "Setor 502" = sellerId: 502).
 3. **"QUAIS CLIENTES?"**: Use sempre 'groupBy: "customer"' na tool query_sales_data.
 
 ESTRATÉGIA DE ANÁLISE:
 1. **PARA TOTAIS E LISTAS**: 
-   - SEMPRE use o parâmetro 'groupBy' na tool 'query_sales_data'.
-   - Ex: "Quais clientes compraram?" -> { groupBy: 'customer', ... }
-   - Ex: "Vendas por vendedor" -> { groupBy: 'seller', ... }
+   - SEMPRE use o parâmetro 'groupBy' na tool 'query_sales_data' se o usuário pedir listas (clientes, cidades, etc).
+   - Se o usuário perguntar "Quanto vendeu" (total geral), a tool já retorna o total calculado no SQL. Confie no campo 'total_vendas_R$' do resumo.
 
 2. **COMPARAÇÃO DE PERÍODOS**:
-   - Compare chamando a tool duas vezes (uma para cada ano/mês) e calcule a diferença.
+   - Compare chamando a tool duas vezes (uma para cada período) e calcule a diferença mentalmente.
 
 TOOLS:
 1. **get_sales_team**: Use para descobrir quem é o Vendedor 105, 502, etc. (Busca exata no banco).
@@ -178,24 +177,20 @@ async function executeToolCall(name, args) {
         const request = pool.request();
 
         // ---------------------------------------------------------
-        // TOOL 1: EQUIPE DE VENDAS (Correção: Filtro SQL Estrito)
+        // TOOL 1: EQUIPE DE VENDAS
         // ---------------------------------------------------------
         if (name === 'get_sales_team') {
             let query = SQL_QUERIES.SALES_TEAM_BASE;
-            
-            // Busca Exata por ID (Evita Alucinação)
             if (args.id) {
                 request.input('id', sql.Int, args.id);
                 query += " AND V.CODMTCEPG = @id";
             } 
-            // Busca por Nome (LIKE)
             else if (args.searchName) {
                 request.input('searchName', sql.VarChar, `%${args.searchName}%`);
                 query += " AND V.nomepg LIKE @searchName";
             }
 
             const result = await request.query(query);
-            
             if (result.recordset.length === 0) {
                 return { message: "Nenhum funcionário encontrado com esses critérios no banco de dados." };
             }
@@ -213,7 +208,7 @@ async function executeToolCall(name, args) {
         }
 
         // ---------------------------------------------------------
-        // TOOL 3: VENDAS (Principal)
+        // TOOL 3: VENDAS (Principal - CORRIGIDA PARA TOTAIS EXATOS)
         // ---------------------------------------------------------
         if (name === 'query_sales_data') {
             const now = new Date();
@@ -229,54 +224,49 @@ async function executeToolCall(name, args) {
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
 
-            // ==================================================================
-            // MODO ANALÍTICO (GROUP BY) - ALTA PERFORMANCE
-            // ==================================================================
+            // Filtros para WHERE dinâmico
+            let whereConditions = [];
+            if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
+            if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
+            
+            // --- QUERY DE TOTALIZAÇÃO (SEMPRE EXECUTA PARA TER O VALOR EXATO) ---
+            // Esta query não tem TOP, para somar tudo.
+            let totalQuery = `
+                ${SQL_QUERIES.BASE_CTE}
+                SELECT 
+                    SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorTotal',
+                    COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
+                FROM pedidos_filtrados ibetpdd
+                INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
+                LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
+            `;
+            if (whereConditions.length > 0) totalQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+            
+            const totalResult = await request.query(totalQuery);
+            const totalReal = totalResult.recordset[0]['ValorTotal'] || 0;
+            const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
+
+
+            // --- SE HOUVER GROUP BY (MODO ANALÍTICO) ---
             if (args.groupBy) {
                 let dimensionColumn = '';
-                let dimensionLabel = '';
-
-                // Mapeia o alias amigável para a coluna real SQL
                 switch(args.groupBy) {
-                    case 'month':
-                        dimensionColumn = "FORMAT(ibetpdd.DATEMSDOCPDD, 'yyyy-MM')";
-                        dimensionLabel = 'Mes';
-                        break;
-                    case 'seller':
-                        dimensionColumn = "ibetcplepg.nomepg";
-                        dimensionLabel = 'Vendedor';
-                        break;
-                    case 'supervisor':
-                        dimensionColumn = "SUP.nomepg";
-                        dimensionLabel = 'Supervisor';
-                        break;
-                    case 'city':
-                        dimensionColumn = "IBETCDD.descdd";
-                        dimensionLabel = 'Cidade';
-                        break;
-                    case 'product_group':
-                        dimensionColumn = "IBETGPOITE.DESGPOITE";
-                        dimensionLabel = 'Grupo';
-                        break;
-                    case 'line':
-                         dimensionColumn = "IBETDOMLINNTE.DESLINNTE";
-                         dimensionLabel = 'Linha';
-                         break;
-                    case 'customer':
-                         dimensionColumn = "IBETCET.NOMRAZSCLCET";
-                         dimensionLabel = 'Cliente';
-                         break;
-                    default:
-                        return { error: `Agrupamento '${args.groupBy}' não suportado.` };
+                    case 'month': dimensionColumn = "FORMAT(ibetpdd.DATEMSDOCPDD, 'yyyy-MM')"; break;
+                    case 'seller': dimensionColumn = "ibetcplepg.nomepg"; break;
+                    case 'supervisor': dimensionColumn = "SUP.nomepg"; break;
+                    case 'city': dimensionColumn = "IBETCDD.descdd"; break;
+                    case 'product_group': dimensionColumn = "IBETGPOITE.DESGPOITE"; break;
+                    case 'line': dimensionColumn = "IBETDOMLINNTE.DESLINNTE"; break;
+                    case 'customer': dimensionColumn = "IBETCET.NOMRAZSCLCET"; break;
+                    default: return { error: `Agrupamento não suportado.` };
                 }
 
-                // Query Agregada Otimizada
                 let aggQuery = `
                     ${SQL_QUERIES.BASE_CTE}
                     SELECT TOP 100
                         ${dimensionColumn} as 'Label',
-                        SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor',
-                        COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos'
+                        SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor'
                     FROM pedidos_filtrados ibetpdd
                     INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD
                     INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE
@@ -291,38 +281,26 @@ async function executeToolCall(name, args) {
                     LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
                     LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
                 `;
-
-                // Injeta filtros SQL opcionais na cláusula WHERE (após os joins, para simplificar)
-                // Nota: O ideal seria injetar na CTE, mas as colunas de Vendedor/Cliente estão fora da CTE base.
-                // Filtramos na query principal.
-                let whereConditions = [];
-                if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
-                if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
-                
-                if (whereConditions.length > 0) {
-                    aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
-                }
-
-                aggQuery += `
-                    GROUP BY ${dimensionColumn}
-                    ORDER BY 'Valor' DESC
-                `;
+                if (whereConditions.length > 0) aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+                aggQuery += ` GROUP BY ${dimensionColumn} ORDER BY 'Valor' DESC`;
 
                 const result = await request.query(aggQuery);
                 return { 
                     summary: {
-                        tipo_relatorio: `Vendas Agrupadas por ${dimensionLabel}`,
+                        total_calculado_sql: totalReal, // Valor exato vindo da query de soma
+                        qtd_pedidos: qtdReal,
+                        tipo_relatorio: `Agrupado por ${args.groupBy}`,
                         registros: result.recordset
                     }
                 };
             }
 
             // ==================================================================
-            // MODO DETALHADO (SELECT *) - APENAS SE GROUPBY FOR VAZIO
+            // MODO DETALHADO (SELECT *) - COM LIMIT DE SEGURANÇA NA VISUALIZAÇÃO
             // ==================================================================
             let detailQuery = `
                 ${SQL_QUERIES.BASE_CTE}
-                SELECT TOP 200 
+                SELECT TOP 50 
                     ibetpdd.DATEMSDOCPDD AS 'Data',
                     ibetpdd.CODPDD AS 'Pedido',
                     SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido',
@@ -339,15 +317,7 @@ async function executeToolCall(name, args) {
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
             `;
 
-             // Filtros Adicionais para Detalhes
-            let detailWhere = [];
-            if (args.sellerId) detailWhere.push("ibetpdd.CODMTCEPG = @sellerId");
-            if (args.customerId) detailWhere.push("ibetpdd.CODCET = @customerId");
-
-            if (detailWhere.length > 0) {
-                 detailQuery += ` WHERE ${detailWhere.join(' AND ')}`;
-            }
-
+            if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
             detailQuery += `
                 GROUP BY 
                     ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, IBETITEPDD.QTDITEPDD,
@@ -358,47 +328,22 @@ async function executeToolCall(name, args) {
             const result = await request.query(detailQuery);
             let data = result.recordset;
 
-            // Filtros JavaScript (apenas texto geral)
-            if (args.generalSearch) {
-                const term = args.generalSearch.toLowerCase();
-                data = data.filter(r => Object.values(r).join(' ').toLowerCase().includes(term));
-            }
-
-            return summarizeSalesData(data);
+            // Retorna o Total Calculado via SQL (Exato) + Amostra de 50 registros
+            return {
+                summary: {
+                    total_vendas_R$: totalReal, // Este valor agora é 100% preciso, somado no banco
+                    total_itens: qtdReal,
+                    nota: "Total calculado no servidor SQL. Exibindo amostra de 50 registros."
+                },
+                llm_sample: data.slice(0, 5), 
+                full_data_frontend: data 
+            };
         }
 
     } catch (sqlErr) {
         console.error("SQL Error:", sqlErr);
         return { error: `Erro SQL: ${sqlErr.message}` };
     }
-}
-
-function summarizeSalesData(data) {
-    if (!data || data.length === 0) return { message: "Nenhum registro de venda encontrado com esses filtros." };
-
-    const totalLiquido = data.reduce((acc, r) => acc + (r['Valor Liquido'] || 0), 0);
-    const totalQtd = data.reduce((acc, r) => acc + (r['Quantidade'] || 0), 0);
-    const sellers = [...new Set(data.map(r => r['Nome Vendedor']))];
-
-    const llmView = data.slice(0, 5).map(r => ({
-        Dt: new Date(r['Data']).toLocaleDateString(),
-        Vend: r['Nome Vendedor'],
-        Cli: r['Razao Social'],
-        Prod: r['Item Descrição'],
-        Val: Math.round(r['Valor Liquido'])
-    }));
-
-    return {
-        summary: {
-            total_vendas_R$: totalLiquido,
-            total_itens: totalQtd,
-            vendedores_encontrados: sellers.length > 5 ? `${sellers.length} vendedores` : sellers,
-            contagem_registros: data.length,
-            nota: "Exibindo amostra de 5 registros."
-        },
-        llm_sample: llmView, 
-        full_data_frontend: data.slice(0, 100)
-    };
 }
 
 // ==================================================================================
@@ -511,6 +456,8 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
 
     if (msg && sender && !sender.includes('@g.us')) {
         console.log(`[WPP] ${sender}: ${msg}`);
+        // Nota: O histórico do WhatsApp não está sendo persistido aqui. 
+        // Para conversas longas no WPP, seria necessário um banco de dados de histórico.
         runChatAgent(msg).then(resp => {
             sendWhatsappMessage(sender, resp.text, instance);
         }).catch(err => {

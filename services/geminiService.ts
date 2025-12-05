@@ -1,5 +1,5 @@
 
-import { SalesSummary } from "../types";
+import { SalesSummary, ChatMessage } from "../types";
 
 // Função para pegar URL da API
 const getApiUrl = () => {
@@ -29,13 +29,28 @@ export const checkBackendHealth = async () => {
     }
 }
 
+// Converte o formato do chat do Frontend para o formato esperado pelo Google Gemini SDK
+const formatHistoryForGemini = (history: ChatMessage[]) => {
+  // Filtra mensagens de erro ou sistema que não devem ir pro contexto da IA
+  const validHistory = history.filter(msg => msg.role === 'user' || msg.role === 'model');
+  
+  // Mapeia para o formato { role: string, parts: [{ text: string }] }
+  return validHistory.map(msg => ({
+    role: msg.role === 'user' ? 'user' : 'model',
+    parts: [{ text: msg.content }]
+  }));
+};
+
 export const sendMessageToAgent = async (
   message: string, 
-  history: any[]
+  history: ChatMessage[]
 ): Promise<{ text: string; data?: SalesSummary }> => {
   
   const API_URL = getApiUrl();
   console.log("Enviando mensagem para API Docker:", API_URL);
+
+  // Formata o histórico corretamente antes de enviar
+  const formattedHistory = formatHistoryForGemini(history);
 
   try {
     const response = await fetch(API_URL, {
@@ -45,7 +60,7 @@ export const sendMessageToAgent = async (
       },
       body: JSON.stringify({
         message,
-        history 
+        history: formattedHistory 
       })
     });
 

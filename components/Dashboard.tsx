@@ -1,6 +1,6 @@
 import React from 'react';
 import { SalesSummary } from '../types';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface DashboardProps {
   data: SalesSummary | null;
@@ -22,6 +22,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
 
   // MODO VISUALIZAÇÃO DE ROTA (VISITAS)
   if (data.visits && data.visits.length > 0) {
+      const firstVisit = data.visits[0];
       return (
         <div className="flex flex-col h-full animate-fade-in">
              <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4 rounded shadow-sm">
@@ -29,7 +30,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
                     <i className="fas fa-map-marker-alt"></i> Rota de Visitas
                 </h3>
                 <p className="text-xs text-blue-600">
-                    Vendedor: <strong>{data.visits[0].NomeVendedor} ({data.visits[0].CodVend})</strong> | Data: <strong>{new Date(data.visits[0].DataVisita).toLocaleDateString('pt-BR')}</strong>
+                    Vendedor: <strong>{firstVisit.NomeVendedor} ({firstVisit.CodVend})</strong> | Data: <strong>{new Date(firstVisit.DataVisita).toLocaleDateString('pt-BR')}</strong>
                 </p>
              </div>
              

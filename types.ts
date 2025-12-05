@@ -1,26 +1,26 @@
 
 export interface SalesRecord {
-  id: string;
+  id: string | number;
   date: string; // ISO date string
-  product: string;
-  category: string;
-  quantity: number;
-  unitPrice: number;
+  product?: string;
+  category?: string;
+  quantity?: number;
+  unitPrice?: number;
   total: number;
   seller: string;
-  region: string;
-  paymentMethod: string;
+  region?: string;
+  paymentMethod?: string;
   // Novos campos da Query Complexa
   supervisor?: string;
   driver?: string;
   city?: string;
   status?: string;
   line?: string;
-  origin?: string; // Origem (Connect, Bees)
-  channel?: string; // Canal Remuneração
-  customer?: string; // Razão Social
-  group?: string; // Grupo de Produto
-  family?: string; // Família de Produto
+  origin?: string; 
+  channel?: string; 
+  customer?: string; 
+  group?: string; 
+  family?: string;
 }
 
 export interface VisitRecord {
@@ -45,17 +45,18 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isThinking?: boolean;
-  relatedData?: any; // To show charts or tables related to the answer
+  relatedData?: any; 
 }
 
 export interface FilterParams {
   startDate?: string;
   endDate?: string;
   seller?: string;
+  sellerId?: number;
+  customerId?: number;
   product?: string;
   category?: string;
   region?: string;
-  // Novos Filtros
   supervisor?: string;
   driver?: string;
   city?: string;
@@ -66,6 +67,7 @@ export interface FilterParams {
   family?: string;
   channel?: string;
   generalSearch?: string;
+  groupBy?: string;
 }
 
 export interface SalesSummary {

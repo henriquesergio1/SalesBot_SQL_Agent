@@ -2,12 +2,6 @@
 import { MOCK_SALES_DB } from '../constants';
 import { FilterParams, SalesSummary } from '../types';
 
-const getEnvVar = (key: string) => {
-  // @ts-ignore
-  if (typeof import.meta !== 'undefined' && import.meta.env) return import.meta.env[key];
-  return undefined;
-};
-
 // Lógica de URL Automática (Zero Config)
 const getDockerUrl = () => {
     const protocol = window.location.protocol;
@@ -16,8 +10,8 @@ const getDockerUrl = () => {
     return `${protocol}//${hostname}:${port}/api/v1/query`;
 }
 
-const rawUseMock = getEnvVar('VITE_USE_MOCK');
-const USE_MOCK_DATA = rawUseMock === 'false' ? false : true; 
+// Fallback seguro se a variável não existir
+const USE_MOCK_DATA = import.meta.env?.VITE_USE_MOCK === 'true';
 
 export const querySalesData = async (params: FilterParams): Promise<SalesSummary> => {
   const DOCKER_API_URL = getDockerUrl();
@@ -38,9 +32,8 @@ export const querySalesData = async (params: FilterParams): Promise<SalesSummary
     }
   }
 
-  // --- MOCK FALLBACK (Código original mantido para fallback) ---
+  // --- MOCK FALLBACK ---
   let filtered = [...MOCK_SALES_DB];
-  // ... (restante do código mock mantido igual) ...
   return {
     totalRevenue: 0,
     totalOrders: 0,

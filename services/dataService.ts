@@ -8,11 +8,12 @@ const getEnvVar = (key: string) => {
   return undefined;
 };
 
-// Lógica atualizada para pegar do LocalStorage
+// Lógica de URL Automática (Zero Config)
 const getDockerUrl = () => {
-    const stored = localStorage.getItem('salesbot_query_url');
-    if (stored) return stored;
-    return getEnvVar('VITE_API_URL') || "http://localhost:8085/api/v1/query";
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const port = '8085';
+    return `${protocol}//${hostname}:${port}/api/v1/query`;
 }
 
 const rawUseMock = getEnvVar('VITE_USE_MOCK');
@@ -20,7 +21,7 @@ const USE_MOCK_DATA = rawUseMock === 'false' ? false : true;
 
 export const querySalesData = async (params: FilterParams): Promise<SalesSummary> => {
   const DOCKER_API_URL = getDockerUrl();
-  console.log(`[DockerClient] API URL: ${DOCKER_API_URL}`);
+  console.log(`[DockerClient] API URL (Auto): ${DOCKER_API_URL}`);
 
   if (!USE_MOCK_DATA) {
     try {

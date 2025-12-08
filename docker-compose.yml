@@ -52,10 +52,10 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
-      # Configurações críticas para conexão estável - adicionado --disable-web-security
-      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu --disable-web-security
-      - LOG_LEVEL=ERROR
+      # CONFIG_SESSION_PHONE_CLIENT removido propositalmente para usar assinatura padrão do Chrome (Resolve loop de conexão)
+      # Configurações otimizadas para estabilidade
+      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
+      - LOG_LEVEL=INFO
       - DEL_INSTANCE=true
       - QRCODE_LIMIT=30
       
@@ -67,8 +67,8 @@ services:
       - WEBHOOK_EVENTS_MESSAGES_SET=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
     volumes:
-      - evolution_instances_final:/evolution/instances
-      - evolution_store_final:/evolution/store
+      - evolution_instances_v2:/evolution/instances
+      - evolution_store_v2:/evolution/store
 
   # 4. SQL Server (Banco de Dados Local)
   sql-server:
@@ -85,5 +85,5 @@ services:
 
 volumes:
   sql_data:
-  evolution_instances_final:
-  evolution_store_final:
+  evolution_instances_v2:
+  evolution_store_v2:

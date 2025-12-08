@@ -271,9 +271,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         {/* Content */}
         <div className="p-6 overflow-y-auto space-y-4">
             
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded text-xs text-blue-700">
-                <i className="fas fa-network-wired mr-1"></i>
-                API Inteligente conectada automaticamente em: <strong>http://{window.location.hostname}:8085</strong>
+            <div className="bg-blue-50 border border-blue-200 p-3 rounded text-xs text-blue-700 flex justify-between items-center">
+                <span>
+                    <i className="fas fa-network-wired mr-1"></i>
+                    API: <strong>http://{window.location.hostname}:8085</strong>
+                </span>
+                <a 
+                    href={`http://${window.location.hostname}:8082`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 transition font-bold"
+                >
+                    <i className="fas fa-external-link-alt mr-1"></i> Debug API
+                </a>
             </div>
 
             <div>
@@ -367,6 +377,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                             
                             <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
                                 <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando a cada 3s...
+                            </p>
+                            <p className="text-[9px] text-gray-300 mt-2 font-mono">
+                                Debug: Verifique `docker logs whatsapp-gateway`
                             </p>
                         </div>
                     )}

@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 
 interface IntegrationModalProps {
@@ -23,6 +24,27 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setSessionName(cleanValue);
   };
 
+  // Função para deletar instância travada
+  const resetInstance = async () => {
+      if (!window.confirm("Isso irá desconectar e apagar a sessão atual para criar uma nova. Confirmar?")) return;
+      
+      setIsLoading(true);
+      setErrorMsg(null);
+      setQrCodeData(null);
+      
+      try {
+          await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
+              method: 'DELETE',
+              headers: { 'apikey': secretKey }
+          });
+          setErrorMsg("✅ Sessão resetada! Aguarde 5 segundos e tente gerar o QR Code novamente.");
+      } catch (e: any) {
+          setErrorMsg(`Erro ao resetar: ${e.message}`);
+      } finally {
+          setIsLoading(false);
+      }
+  }
+
   const generateQrCode = async () => {
     setIsLoading(true);
     setErrorMsg(null);
@@ -39,7 +61,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       // Se falhar mas não for erro de autenticação, assume que pode já existir e segue
       if (!createResponse.ok && createResponse.status !== 403) {
-         // Apenas loga, não trava, pois o connect resolve se já existir
          console.warn("Tentativa de criação retornou status:", createResponse.status);
       }
 
@@ -49,7 +70,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         headers: { 'apikey': secretKey }
       });
 
-      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code. Verifique a URL e a Chave.");
+      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code. Tente RESETAR a sessão.");
 
       const data = await connectResponse.json();
       const qrCode = data.base64 || data.qrcode;
@@ -64,7 +85,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique se o container whatsapp-gateway está rodando.`);
+      setErrorMsg(`Falha: ${err.message}. Tente usar o botão RESETAR SESSÃO.`);
     } finally {
       setIsLoading(false);
     }
@@ -102,14 +123,23 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 />
 
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão (Sem espaços)</label>
-                <input 
-                    type="text" 
-                    value={sessionName}
-                    onChange={handleSessionNameChange}
-                    placeholder="ex: vendas01"
-                    className="w-full border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
-                />
-                <p className="text-[10px] text-gray-400 mt-1">Apenas letras minúsculas e números.</p>
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        value={sessionName}
+                        onChange={handleSessionNameChange}
+                        placeholder="ex: vendas01"
+                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
+                    />
+                    <button 
+                        onClick={resetInstance}
+                        title="Apagar sessão travada e começar do zero"
+                        className="px-3 bg-red-100 text-red-600 rounded hover:bg-red-200 border border-red-200 text-xs font-bold uppercase transition"
+                    >
+                        Resetar
+                    </button>
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">Se der erro no celular, clique em RESETAR e tente de novo.</p>
             </div>
             
             {errorMsg && (

@@ -52,8 +52,12 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      # SERVER_URL removido para permitir conexão automática em qualquer IP
-      # Comunicação interna via Docker Network continua na porta 8080
+      # Configurações críticas para conexão estável
+      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu
+      - LOG_LEVEL=ERROR
+      - DEL_INSTANCE=false
+      
+      # Webhooks
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_APPLICATION_STARTUP=false

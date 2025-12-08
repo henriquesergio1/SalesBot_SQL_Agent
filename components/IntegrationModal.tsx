@@ -26,20 +26,35 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   // Função para deletar instância travada
   const resetInstance = async () => {
-      if (!window.confirm("Isso irá desconectar e apagar a sessão atual para criar uma nova. Confirmar?")) return;
+      if (!window.confirm("Isso irá apagar a sessão '"+sessionName+"' do servidor para corrigir travamentos. Continuar?")) return;
       
       setIsLoading(true);
       setErrorMsg(null);
       setQrCodeData(null);
       
       try {
-          await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
+          // Tenta logout primeiro (Evolution V2)
+          try {
+             await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
+                 method: 'DELETE',
+                 headers: { 'apikey': secretKey }
+             });
+          } catch(e) {}
+
+          // Tenta delete forçado
+          const res = await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
               method: 'DELETE',
               headers: { 'apikey': secretKey }
           });
-          setErrorMsg("✅ Sessão resetada! Aguarde 5 segundos e tente gerar o QR Code novamente.");
+          
+          if(res.ok) {
+             setErrorMsg("✅ Sessão limpa com sucesso! Aguarde 5s e gere o QR Code novamente.");
+          } else {
+             // Mesmo se der erro (ex: não existia), consideramos sucesso para reset visual
+             setErrorMsg("✅ Sessão resetada. Pode tentar conectar.");
+          }
       } catch (e: any) {
-          setErrorMsg(`Erro ao resetar: ${e.message}`);
+          setErrorMsg(`Erro de conexão ao resetar: ${e.message}`);
       } finally {
           setIsLoading(false);
       }
@@ -52,17 +67,15 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     try {
       // 1. Tenta criar a Instância
-      // Nota: Evolution API retorna erro se já existe, mas tudo bem, tentamos conectar logo em seguida
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
-        body: JSON.stringify({ instanceName: sessionName, qrcode: true })
+        body: JSON.stringify({ 
+            instanceName: sessionName, 
+            qrcode: true,
+            integration: "WHATSAPP-BAILEYS" 
+        })
       });
-
-      // Se falhar mas não for erro de autenticação, assume que pode já existir e segue
-      if (!createResponse.ok && createResponse.status !== 403) {
-         console.warn("Tentativa de criação retornou status:", createResponse.status);
-      }
 
       // 2. Busca o QR Code
       const connectResponse = await fetch(`${gatewayUrl}/instance/connect/${sessionName}`, {
@@ -70,17 +83,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         headers: { 'apikey': secretKey }
       });
 
-      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code. Tente RESETAR a sessão.");
+      if (!connectResponse.ok) throw new Error("Falha ao buscar QR Code. Verifique se o container 'whatsapp-gateway' está rodando.");
 
       const data = await connectResponse.json();
-      const qrCode = data.base64 || data.qrcode;
+      
+      // Suporte para V1 e V2 da Evolution
+      const qrCode = data.base64 || data.qrcode || data.code;
 
       if (qrCode) {
         setQrCodeData(qrCode);
-      } else if (data.instance?.status === 'open') {
+      } else if (data.instance?.status === 'open' || data.state === 'open') {
         setErrorMsg("✅ Esta sessão já está CONECTADA no WhatsApp!");
       } else {
-        throw new Error("QR Code não retornado. Aguarde alguns segundos e tente novamente.");
+        throw new Error("QR Code não gerado. Tente clicar em RESETAR e tente de novo.");
       }
 
     } catch (err: any) {
@@ -114,7 +129,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             </div>
 
             <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway WhatsApp (Evolution)</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway WhatsApp</label>
                  <input 
                     type="text" 
                     value={gatewayUrl}
@@ -136,10 +151,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         title="Apagar sessão travada e começar do zero"
                         className="px-3 bg-red-100 text-red-600 rounded hover:bg-red-200 border border-red-200 text-xs font-bold uppercase transition"
                     >
-                        Resetar
+                        Resetar Sessão
                     </button>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">Se der erro no celular, clique em RESETAR e tente de novo.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Se o celular disser "Não foi possível conectar", clique em RESETAR e gere novo QR.</p>
             </div>
             
             {errorMsg && (
@@ -160,7 +175,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 ) : (
                     <div className="text-center animate-fade-in">
                         <img src={qrCodeData} alt="QR Code" className="w-56 h-56 border shadow-sm mx-auto" />
-                        <p className="text-xs mt-2 text-gray-500">Escaneie com o WhatsApp</p>
+                        <p className="text-xs mt-2 text-gray-500">Abra o WhatsApp > Aparelhos Conectados > Conectar Aparelho</p>
                     </div>
                 )}
             </div>

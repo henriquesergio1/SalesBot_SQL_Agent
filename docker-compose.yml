@@ -42,9 +42,9 @@ services:
     depends_on:
       - sql-server
 
-  # 3. WhatsApp Gateway (Evolution API)
+  # 3. WhatsApp Gateway (Evolution API V2)
   whatsapp-gateway:
-    image: atendai/evolution-api:v1.8.2
+    image: atendai/evolution-api:v2.1.1
     container_name: whatsapp-gateway
     restart: always
     ports:
@@ -52,8 +52,17 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      # Configurações críticas para conexão estável
+      - SERVER_TYPE=http
+      
+      # Configurações de Navegador para evitar bloqueio e erro de conexão
+      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
+      - CONFIG_SESSION_PHONE_NAME=Chrome
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu
+      
+      # Banco de Dados (Usando Local Store para simplicidade)
+      - DATABASE_ENABLED=false
+      
+      # Logs e Performance
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=false
       
@@ -62,7 +71,7 @@ services:
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
       - WEBHOOK_EVENTS_QRCODE_UPDATED=true
-      - WEBHOOK_EVENTS_MESSAGES_SET=true
+      - WEBHOOK_EVENTS_MESSAGES_SET=false # Desativado para performance
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
     volumes:
       - evolution_instances:/evolution/instances

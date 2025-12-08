@@ -37,11 +37,8 @@ function App() {
         setHealth(status);
     };
     runCheck(); // Check inicial
-    // Fix: Explicitly cast setInterval return to unknown then number to avoid conflicts with NodeJS.Timeout
-    const interval = window.setInterval(() => {
-        runCheck();
-    }, 30000) as unknown as number;
-    return () => window.clearInterval(interval);
+    const interval = setInterval(runCheck, 30000);
+    return () => clearInterval(interval);
   }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 
   const handleSend = async () => {
@@ -72,8 +69,7 @@ function App() {
       setMessages(prev => [...prev, botMsg]);
       
       if (response.data) {
-        // Explicitly handle undefined vs null for strict types
-        setCurrentData(response.data || null);
+        setCurrentData(response.data);
       }
     } catch (error) {
       console.error(error);

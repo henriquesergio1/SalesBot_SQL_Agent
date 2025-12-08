@@ -40,8 +40,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
       // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
-      // Usa window.setInterval para garantir retorno numérico (Browsers) e evitar conflito com Node.js Types
-      pollInterval.current = window.setInterval(fetchSessionStatus, 3000); 
+      // Usa window.setInterval para garantir retorno numérico (Browsers) e evita erro de tipo Promise<void>
+      pollInterval.current = window.setInterval(() => {
+          fetchSessionStatus(); 
+      }, 3000);
       fetchSessionStatus(); // Chama imediatamente
   };
 

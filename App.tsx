@@ -37,8 +37,10 @@ function App() {
         setHealth(status);
     };
     runCheck(); // Check inicial
-    // Use window.setInterval to avoid TypeScript conflict with NodeJS.Timeout
-    const interval = window.setInterval(runCheck, 30000);
+    // Use window.setInterval wrapped in arrow function to avoid TS promise mismatch error
+    const interval = window.setInterval(() => {
+        runCheck();
+    }, 30000);
     return () => window.clearInterval(interval);
   }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 

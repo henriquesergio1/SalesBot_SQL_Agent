@@ -21,7 +21,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
 
   // Referência para o intervalo de atualização
-  const pollInterval = useRef<NodeJS.Timeout | null>(null);
+  // USANDO 'any' PARA EVITAR ERRO DE BUILD (NodeJS.Timeout vs number)
+  const pollInterval = useRef<any>(null);
 
   // Limpa o intervalo se o modal fechar ou componente desmontar
   useEffect(() => {

@@ -60,7 +60,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setApiStatus('RESETTING...');
       
       try {
-          // 1. Logout forçado
+          // Tenta logout antes de deletar (best effort)
           try {
             await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
                 method: 'DELETE',
@@ -68,16 +68,15 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             });
           } catch (e) { console.log('Logout ignorado'); }
 
-          // 2. Delete da instância
           const res = await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
               method: 'DELETE',
               headers: { 'apikey': secretKey }
           });
           
-          if(!res.ok && res.status !== 404) throw new Error("Falha ao deletar (verifique se a API está online)");
+          if(!res.ok) throw new Error("Falha ao deletar (verifique se a API está online)");
 
-          setErrorMsg("✅ Sessão limpa! Clique em 'Gerar QR Code' para conectar.");
-          setApiStatus('READY');
+          setErrorMsg("✅ Sessão resetada! Clique em 'Gerar QR Code' novamente.");
+          setApiStatus('DISCONNECTED');
       } catch (e: any) {
           setErrorMsg(`Erro ao resetar: ${e.message}`);
           setApiStatus('ERROR');
@@ -97,26 +96,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           if (response.ok) {
               const data = await response.json();
               
-              // DEBUG: Log para ver a resposta bruta
+              // DEBUG: Mostra exatamente o que a API devolveu no console do navegador (F12)
               console.log("[IntegrationModal] API Response:", data);
 
-              // Lógica CORRIGIDA de detecção de Status
-              // 1. Tenta ler do objeto instance (sucesso/conexão)
-              let currentStatus = 'UNKNOWN';
+              // Tenta ler 'state' (novo padrão) ou 'status' (antigo)
+              const rawStatus = data.instance?.state || data.instance?.status || 'UNKNOWN';
+              const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
               
-              if (data.instance && (data.instance.state || data.instance.status)) {
-                  currentStatus = (data.instance.state || data.instance.status).toUpperCase();
-              } 
-              // 2. Se não tem instance, mas tem base64, é QR Code ativo
-              else if (data.base64) {
-                  currentStatus = 'QR CODE';
-                  if (data.count) currentStatus += ` (${data.count})`;
-              }
+              setApiStatus(currentStatus.toUpperCase());
 
-              setApiStatus(currentStatus);
-
-              // A. Conexão Estabelecida
-              if (currentStatus === 'OPEN' || currentStatus === 'CONNECTED') {
+              // 1. Verifica se conectou
+              if (currentStatus === 'open' || currentStatus === 'connected') {
                   setQrCodeData(null);
                   setIsConnected(true);
                   setErrorMsg(null);
@@ -124,7 +114,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return;
               }
 
-              // B. Mostra QR Code se disponível
+              // 2. Atualiza QR Code se disponível e status não for conectado
+              // Se status for 'connecting' ou 'close', mostramos o QR Code
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
@@ -146,20 +137,26 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setApiStatus('STARTING...');
     
     try {
-      // 0. Verifica se já existe tentando criar. Se der erro (ex: já existe), seguimos para o connect.
+      // 0. Logout Preventivo (Evita conflito de sessão anterior)
+      try {
+        await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
+            method: 'DELETE', headers: { 'apikey': secretKey }
+        });
+      } catch (e) { /* Ignora erro de logout */ }
+
+      // 1. Tenta criar a Instância
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
         body: JSON.stringify({ instanceName: sessionName, qrcode: true })
       });
 
-      if (createResponse.ok) {
-          console.log("Instância criada com sucesso");
-      } else {
-         console.warn("Instância provavelmente já existe, tentando conectar...");
+      if (!createResponse.ok && createResponse.status !== 403) {
+         console.warn("Status criação:", createResponse.status);
+         // Se der erro 403, provavelmente já existe, então seguimos para o connect
       }
 
-      // 1. Inicia o Polling para buscar o QR Code
+      // 2. Inicia o Polling para buscar o QR Code novo
       startPolling();
 
     } catch (err: any) {
@@ -222,7 +219,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         Resetar
                     </button>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">Dica: Se tiver problemas de conexão, clique em RESETAR e tente novamente.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Dica: Use 'vendas01' ou crie um nome único.</p>
             </div>
             
             {errorMsg && (
@@ -266,17 +263,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                             <div className="mt-3 flex flex-col items-center gap-1">
                                 <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
                                     apiStatus === 'OPEN' || apiStatus === 'CONNECTED' ? 'bg-green-100 text-green-700' : 
-                                    apiStatus.includes('QR CODE') ? 'bg-yellow-100 text-yellow-700' : 
+                                    apiStatus === 'CONNECTING' ? 'bg-yellow-100 text-yellow-700' : 
                                     apiStatus === 'CLOSE' ? 'bg-orange-100 text-orange-700' :
                                     'bg-gray-200 text-gray-600'
                                 }`}>
                                     STATUS: {apiStatus}
                                 </span>
-                                <p className="text-xs font-semibold text-gray-700">Abra o WhatsApp > Aparelhos Conectados > Conectar</p>
+                                <p className="text-xs font-semibold text-gray-700">Escaneie com o WhatsApp</p>
                             </div>
                             
                             <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
-                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando...
+                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando a cada 3s...
                             </p>
                         </div>
                     )}

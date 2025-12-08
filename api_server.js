@@ -679,11 +679,13 @@ app.post('/api/v1/chat', async (req, res) => {
 });
 
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    // Return 200 OK immediately for Evolution V2 webhook compliance
+    // Retornar 200 OK imediatamente para a Evolution API V2
+    // Se não retornar rápido, a API marca o webhook como falho e desconecta
     res.status(200).json({ status: 'queued' });
 
     try {
         const data = req.body;
+        // Estrutura Evolution V2
         const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
         const sender = data.data?.key?.remoteJid;
         const instance = data.instance || 'vendas_bot';

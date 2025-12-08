@@ -56,7 +56,7 @@ services:
       # Configurações críticas para conexão estável
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu
       - LOG_LEVEL=ERROR
-      - DEL_INSTANCE=false
+      - DEL_INSTANCE=true
       
       # Webhooks
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook

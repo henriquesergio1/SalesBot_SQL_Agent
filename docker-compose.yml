@@ -52,9 +52,9 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
-      # Configurações críticas para conexão estável
-      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu
+      # Removido CONFIG_SESSION_PHONE_CLIENT para evitar erros de handshake
+      # Configurações críticas para conexão estável (Removido --single-process)
+      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=true
       

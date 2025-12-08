@@ -49,6 +49,23 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setSessionName(cleanValue);
   };
 
+  // Função auxiliar para verificar se realmente deletou
+  const ensureDeleted = async (retries = 5): Promise<boolean> => {
+      for (let i = 0; i < retries; i++) {
+          try {
+              const res = await fetch(`${gatewayUrl}/instance/connect/${sessionName}`, {
+                  headers: { 'apikey': secretKey }
+              });
+              if (res.status === 404) return true; // Sucesso, não existe mais
+              // Se retornar 200, ainda existe, espera e tenta de novo
+              await new Promise(r => setTimeout(r, 1000));
+          } catch (e) {
+              return true; // Se der erro de conexão, assumimos que pode ter caído
+          }
+      }
+      return false; // Não deletou após retries
+  };
+
   // Função para deletar instância travada
   const resetInstance = async () => {
       if (!window.confirm("Isso irá desconectar e apagar a sessão atual para criar uma nova. Confirmar?")) return;
@@ -75,15 +92,24 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               headers: { 'apikey': secretKey }
           });
           
-          // CRITICAL FIX: Se retornar 404 (não existe) ou 400 (já deletada/fechada), consideramos sucesso!
-          // Isso permite que o usuário prossiga para criar uma nova.
+          // Se falhar (e não for 404/400), erro
           if (!res.ok && res.status !== 404 && res.status !== 400 && res.status !== 500) {
               const errorText = await res.text().catch(() => 'Sem detalhes');
               throw new Error(`Falha API (${res.status}): ${errorText}`);
           }
 
-          setErrorMsg("✅ Sessão resetada! Clique em 'Gerar QR Code' novamente.");
-          setApiStatus('DISCONNECTED');
+          setApiStatus('CLEANING...');
+          // 3. Garante que sumiu do disco (Polling de verificação)
+          const deleted = await ensureDeleted();
+          
+          if (deleted) {
+             setErrorMsg("✅ Sessão limpa com sucesso! Aguarde 5s e clique em 'Gerar QR Code'.");
+             setApiStatus('READY');
+          } else {
+             setErrorMsg("⚠️ Comando enviado, mas a API ainda reporta a sessão. Tente 'Resetar' novamente.");
+             setApiStatus('ZOMBIE');
+          }
+
       } catch (e: any) {
           console.error(e);
           setErrorMsg(`Erro ao resetar: ${e.message}`);
@@ -118,16 +144,22 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               
               setApiStatus(currentStatus.toUpperCase());
 
-              // 1. Verifica se conectou
-              if (currentStatus === 'open' || currentStatus === 'connected') {
+              // 1. Verifica se conectou (OPEN apenas)
+              if (currentStatus === 'open') {
                   setQrCodeData(null);
                   setIsConnected(true);
                   setErrorMsg(null);
                   stopPolling();
                   return;
               }
+              
+              if (currentStatus === 'connecting') {
+                  setQrCodeData(null);
+                  setIsConnected(false); // Ainda não, espera ficar open
+                  return;
+              }
 
-              // 2. Atualiza QR Code se disponível e status não for conectado
+              // 2. Atualiza QR Code se disponível
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
@@ -155,12 +187,15 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setApiStatus('STARTING...');
     
     try {
-      // 0. Logout Preventivo (Evita conflito de sessão anterior)
+      // 0. Logout Preventivo
       try {
         await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
             method: 'DELETE', headers: { 'apikey': secretKey }
         });
       } catch (e) { /* Ignora */ }
+      
+      // Delay de segurança para garantir que o sistema de arquivos liberou
+      await new Promise(r => setTimeout(r, 1500));
 
       // 1. Tenta criar a Instância
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
@@ -171,7 +206,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       if (!createResponse.ok) {
          // Se der 403 (Forbidden), geralmente significa que a instância já existe.
-         // Nesse caso, não é um erro fatal, apenas tentamos conectar nela.
          if (createResponse.status === 403 || createResponse.status === 409) {
              console.log("Instância já existe, prosseguindo para conexão...");
          } else {
@@ -181,7 +215,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
 
       // 2. Inicia o Polling para buscar o QR Code novo
-      // Pequeno delay para dar tempo da API processar a criação
       setTimeout(() => startPolling(), 1000);
 
     } catch (err: any) {
@@ -241,7 +274,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         title="Apagar sessão travada e começar do zero"
                         className="px-3 bg-red-100 text-red-600 rounded hover:bg-red-200 border border-red-200 text-xs font-bold uppercase transition"
                     >
-                        Resetar
+                        {isLoading && apiStatus === 'RESETTING...' ? '...' : 'Resetar'}
                     </button>
                 </div>
                 <p className="text-[10px] text-gray-400 mt-1">Dica: Use 'vendas01' ou crie um nome único.</p>

@@ -37,7 +37,8 @@ function App() {
         setHealth(status);
     };
     runCheck(); // Check inicial
-    const interval = setInterval(runCheck, 30000);
+    // Usando arrow function para evitar erro de tipo do TypeScript
+    const interval = setInterval(() => { runCheck() }, 30000);
     return () => clearInterval(interval);
   }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 

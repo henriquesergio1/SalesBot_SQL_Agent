@@ -708,6 +708,15 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const sender = data.data?.key?.remoteJid;
     const instance = data.instance || 'vendas_bot';
 
+    // Log detalhado para debug da conexão
+    console.log("--- WEBHOOK RECEIVED ---");
+    console.log("Event Type:", data.event);
+    console.log("Instance:", instance);
+    if (data.event === 'connection.update') {
+        console.log("Connection Update - State:", data.data?.state);
+        console.log("Connection Update - StatusReason:", data.data?.statusReason);
+    }
+
     if (msg && sender && !sender.includes('@g.us')) {
         runChatAgent(msg).then(resp => {
             sendWhatsappMessage(sender, resp.text, instance);
@@ -721,11 +730,16 @@ async function sendWhatsappMessage(to, text, session) {
     const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
     const number = to.replace('@s.whatsapp.net', '');
     try {
-        await fetch(`${gatewayUrl}/message/sendText/${session}`, {
+        const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify({ number, options: { delay: 1200 }, textMessage: { text } })
         });
+        if (!response.ok) {
+            console.error(`WPP Send Fail: ${response.status} ${response.statusText}`);
+        } else {
+            console.log(`WPP Sent to ${to}`);
+        }
     } catch (e) { console.error("WPP Send Error", e); }
 }
 

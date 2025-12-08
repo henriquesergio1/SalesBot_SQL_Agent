@@ -16,6 +16,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  
+  // Estado para Debug Visual
+  const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
 
   // Referência para o intervalo de atualização
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
@@ -36,7 +39,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
       // Atualiza a cada 5 segundos (QR do WhatsApp dura ~20s)
-      pollInterval.current = setInterval(fetchSessionStatus, 5000);
+      pollInterval.current = setInterval(fetchSessionStatus, 4000); // Reduzido para 4s para evitar stale
       fetchSessionStatus(); // Chama imediatamente
   };
 
@@ -54,6 +57,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setErrorMsg(null);
       setQrCodeData(null);
       setIsConnected(false);
+      setApiStatus('RESETTING...');
       
       try {
           // Tenta logout antes de deletar (best effort)
@@ -69,8 +73,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               headers: { 'apikey': secretKey }
           });
           setErrorMsg("✅ Sessão resetada! Clique em 'Gerar QR Code' novamente.");
+          setApiStatus('DISCONNECTED');
       } catch (e: any) {
           setErrorMsg(`Erro ao resetar: ${e.message}`);
+          setApiStatus('ERROR');
       } finally {
           setIsLoading(false);
       }
@@ -78,7 +84,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const fetchSessionStatus = async () => {
       try {
-          const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}`, {
+          // Adicionado timestamp (?_t=) para evitar cache do navegador e garantir QR Code fresco
+          const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
             method: 'GET',
             headers: { 'apikey': secretKey }
           });
@@ -86,8 +93,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           if (response.ok) {
               const data = await response.json();
               
+              const currentStatus = data.instance?.status || 'UNKNOWN';
+              setApiStatus(currentStatus.toUpperCase());
+
               // 1. Verifica se conectou
-              if (data.instance?.status === 'open') {
+              if (currentStatus === 'open') {
                   setQrCodeData(null);
                   setIsConnected(true);
                   setErrorMsg(null);
@@ -103,7 +113,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           }
       } catch (e) {
           console.error("Polling error:", e);
-          // Não mostramos erro na UI durante polling para evitar "piscar"
+          setApiStatus('CONNECTION ERROR');
       }
   };
 
@@ -112,6 +122,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setErrorMsg(null);
     setQrCodeData(null);
     setIsConnected(false);
+    setApiStatus('STARTING...');
     
     try {
       // 1. Tenta criar a Instância
@@ -133,8 +144,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setErrorMsg(`Falha: ${err.message}. Tente RESETAR a sessão.`);
       setIsLoading(false);
     } finally {
-        // Removemos setIsLoading(false) daqui para manter UI fluida durante polling,
-        // mas vamos definir como false logo após iniciar o polling
         setTimeout(() => setIsLoading(false), 500);
     }
   };
@@ -222,15 +231,26 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </button>
                     ) : (
                         <div className="text-center animate-fade-in flex flex-col items-center">
-                            <div className="relative">
+                            <div className="relative group">
                                 <img src={qrCodeData} alt="QR Code" className="w-56 h-56 border shadow-sm bg-white p-2" />
                                 <div className="absolute -bottom-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-full animate-pulse shadow">
                                     Ao Vivo
                                 </div>
                             </div>
-                            <p className="text-xs mt-3 font-semibold text-gray-700">Escaneie com o WhatsApp</p>
+                            
+                            {/* Status Indicator for Debugging */}
+                            <div className="mt-3 flex flex-col items-center gap-1">
+                                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                    apiStatus === 'OPEN' ? 'bg-green-100 text-green-700' : 
+                                    apiStatus === 'CONNECTING' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-200 text-gray-600'
+                                }`}>
+                                    STATUS API: {apiStatus}
+                                </span>
+                                <p className="text-xs font-semibold text-gray-700">Escaneie com o WhatsApp</p>
+                            </div>
+                            
                             <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
-                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando código a cada 5s...
+                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando código a cada 4s...
                             </p>
                         </div>
                     )}

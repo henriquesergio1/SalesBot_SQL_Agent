@@ -38,8 +38,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
-      // Atualiza a cada 5 segundos (QR do WhatsApp dura ~20s)
-      pollInterval.current = setInterval(fetchSessionStatus, 4000); // Reduzido para 4s para evitar stale
+      // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
+      pollInterval.current = setInterval(fetchSessionStatus, 3000); 
       fetchSessionStatus(); // Chama imediatamente
   };
 
@@ -68,10 +68,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             });
           } catch (e) { console.log('Logout ignorado'); }
 
-          await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
+          const res = await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
               method: 'DELETE',
               headers: { 'apikey': secretKey }
           });
+          
+          if(!res.ok) throw new Error("Falha ao deletar (verifique se a API está online)");
+
           setErrorMsg("✅ Sessão resetada! Clique em 'Gerar QR Code' novamente.");
           setApiStatus('DISCONNECTED');
       } catch (e: any) {
@@ -93,11 +96,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           if (response.ok) {
               const data = await response.json();
               
-              const currentStatus = data.instance?.status || 'UNKNOWN';
+              // DEBUG: Mostra exatamente o que a API devolveu no console do navegador (F12)
+              console.log("[IntegrationModal] API Response:", data);
+
+              // Tenta ler 'state' (novo padrão) ou 'status' (antigo)
+              const rawStatus = data.instance?.state || data.instance?.status || 'UNKNOWN';
+              const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
+              
               setApiStatus(currentStatus.toUpperCase());
 
               // 1. Verifica se conectou
-              if (currentStatus === 'open') {
+              if (currentStatus === 'open' || currentStatus === 'connected') {
                   setQrCodeData(null);
                   setIsConnected(true);
                   setErrorMsg(null);
@@ -105,11 +114,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return;
               }
 
-              // 2. Atualiza QR Code se disponível
+              // 2. Atualiza QR Code se disponível e status não for conectado
+              // Se status for 'connecting' ou 'close', mostramos o QR Code
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
               }
+          } else {
+              setApiStatus(`HTTP ${response.status}`);
           }
       } catch (e) {
           console.error("Polling error:", e);
@@ -125,6 +137,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setApiStatus('STARTING...');
     
     try {
+      // 0. Logout Preventivo (Evita conflito de sessão anterior)
+      try {
+        await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
+            method: 'DELETE', headers: { 'apikey': secretKey }
+        });
+      } catch (e) { /* Ignora erro de logout */ }
+
       // 1. Tenta criar a Instância
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
@@ -134,15 +153,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       if (!createResponse.ok && createResponse.status !== 403) {
          console.warn("Status criação:", createResponse.status);
+         // Se der erro 403, provavelmente já existe, então seguimos para o connect
       }
 
-      // 2. Inicia o Polling para manter QR atualizado
+      // 2. Inicia o Polling para buscar o QR Code novo
       startPolling();
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Tente RESETAR a sessão.`);
+      setErrorMsg(`Falha: ${err.message}. Verifique a URL do Gateway.`);
       setIsLoading(false);
+      setApiStatus('ERROR');
     } finally {
         setTimeout(() => setIsLoading(false), 500);
     }
@@ -198,7 +219,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         Resetar
                     </button>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">Se der erro no celular, clique em RESETAR e tente de novo.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Dica: Use 'vendas01' ou crie um nome único.</p>
             </div>
             
             {errorMsg && (
@@ -241,16 +262,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                             {/* Status Indicator for Debugging */}
                             <div className="mt-3 flex flex-col items-center gap-1">
                                 <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                                    apiStatus === 'OPEN' ? 'bg-green-100 text-green-700' : 
-                                    apiStatus === 'CONNECTING' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-200 text-gray-600'
+                                    apiStatus === 'OPEN' || apiStatus === 'CONNECTED' ? 'bg-green-100 text-green-700' : 
+                                    apiStatus === 'CONNECTING' ? 'bg-yellow-100 text-yellow-700' : 
+                                    apiStatus === 'CLOSE' ? 'bg-orange-100 text-orange-700' :
+                                    'bg-gray-200 text-gray-600'
                                 }`}>
-                                    STATUS API: {apiStatus}
+                                    STATUS: {apiStatus}
                                 </span>
                                 <p className="text-xs font-semibold text-gray-700">Escaneie com o WhatsApp</p>
                             </div>
                             
                             <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
-                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando código a cada 4s...
+                                <i className="fas fa-sync fa-spin text-blue-400"></i> Atualizando a cada 3s...
                             </p>
                         </div>
                     )}

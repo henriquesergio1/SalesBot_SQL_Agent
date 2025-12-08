@@ -52,7 +52,10 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      # CONFIG_SESSION_PHONE_CLIENT removido propositalmente para usar assinatura padrão do Chrome (Resolve loop de conexão)
+      # Configuração de Identidade para evitar desconexão 401
+      - CONFIG_SESSION_PHONE_CLIENT=Sales Bot
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      
       # Configurações otimizadas para estabilidade
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
       - LOG_LEVEL=INFO
@@ -67,8 +70,9 @@ services:
       - WEBHOOK_EVENTS_MESSAGES_SET=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
     volumes:
-      - evolution_instances_v2:/evolution/instances
-      - evolution_store_v2:/evolution/store
+      # Volumes v4 para garantir ambiente 100% limpo
+      - evolution_instances_v4:/evolution/instances
+      - evolution_store_v4:/evolution/store
 
   # 4. SQL Server (Banco de Dados Local)
   sql-server:
@@ -85,5 +89,5 @@ services:
 
 volumes:
   sql_data:
-  evolution_instances_v2:
-  evolution_store_v2:
+  evolution_instances_v4:
+  evolution_store_v4:

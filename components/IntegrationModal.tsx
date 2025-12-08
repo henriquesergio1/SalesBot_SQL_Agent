@@ -125,8 +125,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   // Verifica estabilidade da conexão (Handshake)
   const verifyStability = async () => {
       setApiStatus('HANDSHAKE...');
-      // Espera 5 segundos para garantir que o celular não vai cair
-      await new Promise(r => setTimeout(r, 5000));
+      // AUMENTADO PARA 10s para pegar o erro 'device_removed' que ocorre após 7s
+      await new Promise(r => setTimeout(r, 10000));
       
       try {
         const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
@@ -340,7 +340,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <div className="text-center">
                                     <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                                     <p className="text-blue-600 font-bold">Validando conexão...</p>
-                                    <p className="text-xs text-gray-500">Mantenha o WhatsApp aberto no celular.</p>
+                                    <p className="text-xs text-gray-500 animate-pulse">Aguarde 10 segundos para confirmação final.</p>
                                 </div>
                             ) : (
                                 <button 

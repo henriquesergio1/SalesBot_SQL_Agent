@@ -60,7 +60,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setApiStatus('RESETTING...');
       
       try {
-          // 1. Logout forçado
+          // 1. Logout forçado (tentativa)
           try {
             await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
                 method: 'DELETE',
@@ -74,12 +74,16 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               headers: { 'apikey': secretKey }
           });
           
-          if(!res.ok && res.status !== 404) throw new Error("Falha ao deletar (verifique se a API está online)");
+          if(!res.ok && res.status !== 404) {
+             const errText = await res.text();
+             throw new Error(`Falha ao deletar: ${errText}`);
+          }
 
           setErrorMsg("✅ Sessão limpa! Clique em 'Gerar QR Code' para conectar.");
           setApiStatus('READY');
-      } catch (e: any) {
-          setErrorMsg(`Erro ao resetar: ${e.message}`);
+      } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          setErrorMsg(`Erro ao resetar: ${message}`);
           setApiStatus('ERROR');
       } finally {
           setIsLoading(false);
@@ -95,19 +99,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           });
 
           if (response.ok) {
-              const data = await response.json();
+              const data = await response.json() as any;
               
-              // DEBUG: Log para ver a resposta bruta
+              // DEBUG: Log para ver a resposta bruta no console do navegador
               console.log("[IntegrationModal] API Response:", data);
 
               // Lógica CORRIGIDA de detecção de Status
               // 1. Tenta ler do objeto instance (sucesso/conexão)
               let currentStatus = 'UNKNOWN';
               
+              // Verifica status dentro de 'instance' (formato padrão quando conectado/criado)
               if (data.instance && (data.instance.state || data.instance.status)) {
                   currentStatus = (data.instance.state || data.instance.status).toUpperCase();
               } 
-              // 2. Se não tem instance, mas tem base64, é QR Code ativo
+              // 2. Verifica se o QR Code veio na raiz (formato comum da Evolution v1.8 no endpoint connect)
               else if (data.base64) {
                   currentStatus = 'QR CODE';
                   if (data.count) currentStatus += ` (${data.count})`;
@@ -132,8 +137,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           } else {
               setApiStatus(`HTTP ${response.status}`);
           }
-      } catch (e) {
-          console.error("Polling error:", e);
+      } catch (err) {
+          console.error("Polling error:", err);
           setApiStatus('CONNECTION ERROR');
       }
   };
@@ -162,9 +167,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       // 1. Inicia o Polling para buscar o QR Code
       startPolling();
 
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique a URL do Gateway.`);
+      setErrorMsg(`Falha: ${message}. Verifique a URL do Gateway.`);
       setIsLoading(false);
       setApiStatus('ERROR');
     } finally {

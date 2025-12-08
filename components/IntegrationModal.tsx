@@ -21,7 +21,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
 
   // Referência para o intervalo de atualização
-  // TIPO: number | null para ser compatível estritamente com window.setInterval
   const pollInterval = useRef<number | null>(null);
 
   // Limpa o intervalo se o modal fechar ou componente desmontar
@@ -40,10 +39,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
       // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
-      // Usa window.setInterval para garantir retorno numérico (Browsers) e evita erro de tipo Promise<void>
+      // Usa cast para 'unknown' depois 'number' para satisfazer TypeScript em ambientes com @types/node
       pollInterval.current = window.setInterval(() => {
           fetchSessionStatus(); 
-      }, 3000);
+      }, 3000) as unknown as number;
       fetchSessionStatus(); // Chama imediatamente
   };
 
@@ -109,15 +108,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               console.log("[IntegrationModal] API Response:", data);
 
               // Lógica CORRIGIDA de detecção de Status
-              // 1. Tenta ler do objeto instance (sucesso/conexão)
               let currentStatus = 'UNKNOWN';
               
               // Verifica status dentro de 'instance' (formato padrão quando conectado/criado)
-              if (data.instance && (data.instance.state || data.instance.status)) {
+              if (data && data.instance && (data.instance.state || data.instance.status)) {
                   currentStatus = (data.instance.state || data.instance.status).toUpperCase();
               } 
               // 2. Verifica se o QR Code veio na raiz (formato comum da Evolution v1.8 no endpoint connect)
-              else if (data.base64) {
+              else if (data && data.base64) {
                   currentStatus = 'QR CODE';
                   if (data.count) currentStatus += ` (${data.count})`;
               }
@@ -134,7 +132,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
 
               // B. Mostra QR Code se disponível
-              if (data.base64) {
+              if (data && data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
               }

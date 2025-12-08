@@ -37,10 +37,10 @@ function App() {
         setHealth(status);
     };
     runCheck(); // Check inicial
-    // Use window.setInterval wrapped in arrow function to avoid TS promise mismatch error
+    // Fix: Explicitly cast setInterval return to unknown then number to avoid conflicts with NodeJS.Timeout
     const interval = window.setInterval(() => {
         runCheck();
-    }, 30000);
+    }, 30000) as unknown as number;
     return () => window.clearInterval(interval);
   }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 

@@ -21,7 +21,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
 
   // Referência para o intervalo de atualização
-  // Usando 'any' para evitar conflito de tipos entre Node.js e Browser durante o build
   const pollInterval = useRef<any>(null);
 
   // Limpa o intervalo se o modal fechar ou componente desmontar
@@ -39,7 +38,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
-      // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
+      // Atualiza a cada 3 segundos
       pollInterval.current = setInterval(() => { fetchSessionStatus() }, 3000) as unknown as number;
       fetchSessionStatus(); // Chama imediatamente
   };
@@ -92,13 +91,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               headers: { 'apikey': secretKey }
           });
           
-          // Se falhar (e não for 404/400), erro
+          // Se falhar (e não for 404/400), considera erro se não for "not found"
           if (!res.ok && res.status !== 404 && res.status !== 400 && res.status !== 500) {
               const errorText = await res.text().catch(() => 'Sem detalhes');
               throw new Error(`Falha API (${res.status}): ${errorText}`);
           }
 
           setApiStatus('CLEANING...');
+          
+          // Delay extra para garantir que o Docker limpou o disco
+          await new Promise(r => setTimeout(r, 2000));
+
           // 3. Garante que sumiu do disco (Polling de verificação)
           const deleted = await ensureDeleted();
           
@@ -119,9 +122,35 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
   }
 
+  // Verifica estabilidade da conexão (Handshake)
+  const verifyStability = async () => {
+      setApiStatus('HANDSHAKE...');
+      // Espera 5 segundos para garantir que o celular não vai cair
+      await new Promise(r => setTimeout(r, 5000));
+      
+      try {
+        const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
+            headers: { 'apikey': secretKey }
+        });
+        const data = await response.json();
+        const state = data.instance?.state || data.instance?.status;
+        
+        if (state === 'open') {
+            setQrCodeData(null);
+            setIsConnected(true);
+            setErrorMsg(null);
+            stopPolling();
+        } else {
+            setApiStatus('RETRYING...'); // Caiu durante o handshake
+            // Não para o polling, deixa tentar pegar o QR Code de novo na próxima volta
+        }
+      } catch (e) {
+          console.error(e);
+      }
+  };
+
   const fetchSessionStatus = async () => {
       try {
-          // Adicionado timestamp (?_t=) para evitar cache do navegador e garantir QR Code fresco
           const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
             method: 'GET',
             headers: { 'apikey': secretKey }
@@ -130,10 +159,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           if (response.ok) {
               const data = await response.json();
               
-              // Tenta ler 'state' (novo padrão) ou 'status' (antigo)
               let rawStatus = data.instance?.state || data.instance?.status;
               
-              // Se não tem status explícito mas tem QR Code (base64) na raiz, assumimos que está aguardando leitura
               if (!rawStatus && data.base64) {
                   rawStatus = 'QRCODE';
               }
@@ -142,30 +169,33 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               
               const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
               
-              setApiStatus(currentStatus.toUpperCase());
+              // Evita atualizar status visualmente se estivermos no meio do handshake
+              if (apiStatus !== 'HANDSHAKE...') {
+                setApiStatus(currentStatus.toUpperCase());
+              }
 
-              // 1. Verifica se conectou (OPEN apenas)
+              // 1. Verifica se conectou
               if (currentStatus === 'open') {
-                  setQrCodeData(null);
-                  setIsConnected(true);
-                  setErrorMsg(null);
-                  stopPolling();
+                  // SE AINDA NÃO ESTÁ CONECTADO VISUALMENTE, VERIFICA ESTABILIDADE
+                  if (!isConnected && apiStatus !== 'HANDSHAKE...') {
+                      await verifyStability();
+                  }
                   return;
               }
               
               if (currentStatus === 'connecting') {
                   setQrCodeData(null);
-                  setIsConnected(false); // Ainda não, espera ficar open
+                  setIsConnected(false); 
+                  setApiStatus('FINALIZANDO...');
                   return;
               }
 
               // 2. Atualiza QR Code se disponível
-              if (data.base64) {
+              if (data.base64 && apiStatus !== 'HANDSHAKE...') {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
               }
           } else {
-              // Se der 404 aqui, significa que a sessão caiu ou não existe. Paramos o polling.
               if (response.status === 404) {
                   setApiStatus('NOT FOUND');
                   stopPolling();
@@ -187,17 +217,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setApiStatus('STARTING...');
     
     try {
-      // 0. Logout Preventivo
       try {
         await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
             method: 'DELETE', headers: { 'apikey': secretKey }
         });
       } catch (e) { /* Ignora */ }
       
-      // Delay de segurança para garantir que o sistema de arquivos liberou
       await new Promise(r => setTimeout(r, 1500));
 
-      // 1. Tenta criar a Instância
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
@@ -205,21 +232,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       });
 
       if (!createResponse.ok) {
-         // Se der 403 (Forbidden), geralmente significa que a instância já existe.
          if (createResponse.status === 403 || createResponse.status === 409) {
-             console.log("Instância já existe, prosseguindo para conexão...");
+             console.log("Instância já existe, prosseguindo...");
          } else {
              const errText = await createResponse.text().catch(() => '');
              throw new Error(`Erro ao criar (${createResponse.status}): ${errText}`);
          }
       }
 
-      // 2. Inicia o Polling para buscar o QR Code novo
       setTimeout(() => startPolling(), 1000);
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique se o Gateway está online em ${gatewayUrl}`);
+      setErrorMsg(`Falha: ${err.message}. Verifique se o Gateway está online.`);
       setIsLoading(false);
       setApiStatus('ERROR');
     } finally {
@@ -300,14 +325,24 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             ) : (
                 <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded border-2 border-dashed min-h-[200px]">
                     {!qrCodeData ? (
-                        <button 
-                            onClick={generateQrCode}
-                            disabled={isLoading}
-                            className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2"
-                        >
-                            {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-qrcode"></i>}
-                            {isLoading ? 'Iniciando...' : 'Gerar QR Code'}
-                        </button>
+                        <div className="flex flex-col items-center">
+                            {apiStatus === 'FINALIZANDO...' || apiStatus === 'HANDSHAKE...' ? (
+                                <div className="text-center">
+                                    <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                                    <p className="text-blue-600 font-bold">Validando conexão...</p>
+                                    <p className="text-xs text-gray-500">Mantenha o WhatsApp aberto no celular.</p>
+                                </div>
+                            ) : (
+                                <button 
+                                    onClick={generateQrCode}
+                                    disabled={isLoading}
+                                    className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2"
+                                >
+                                    {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-qrcode"></i>}
+                                    {isLoading ? 'Iniciando...' : 'Gerar QR Code'}
+                                </button>
+                            )}
+                        </div>
                     ) : (
                         <div className="text-center animate-fade-in flex flex-col items-center">
                             <div className="relative group">

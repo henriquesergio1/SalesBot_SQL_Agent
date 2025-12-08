@@ -40,7 +40,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
       // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
-      pollInterval.current = setInterval(() => { fetchSessionStatus() }, 3000); 
+      pollInterval.current = setInterval(() => { fetchSessionStatus() }, 3000) as unknown as number;
       fetchSessionStatus(); // Chama imediatamente
   };
 
@@ -61,7 +61,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setApiStatus('RESETTING...');
       
       try {
-          // Tenta logout antes de deletar (best effort)
+          // 1. Tenta Logout (Best effort)
           try {
             await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
                 method: 'DELETE',
@@ -69,16 +69,23 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             });
           } catch (e) { console.log('Logout ignorado'); }
 
+          // 2. Tenta Deletar
           const res = await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
               method: 'DELETE',
               headers: { 'apikey': secretKey }
           });
           
-          if(!res.ok) throw new Error("Falha ao deletar (verifique se a API está online)");
+          // CRITICAL FIX: Se retornar 404 (não existe) ou 400 (já deletada/fechada), consideramos sucesso!
+          // Isso permite que o usuário prossiga para criar uma nova.
+          if (!res.ok && res.status !== 404 && res.status !== 400 && res.status !== 500) {
+              const errorText = await res.text().catch(() => 'Sem detalhes');
+              throw new Error(`Falha API (${res.status}): ${errorText}`);
+          }
 
           setErrorMsg("✅ Sessão resetada! Clique em 'Gerar QR Code' novamente.");
           setApiStatus('DISCONNECTED');
       } catch (e: any) {
+          console.error(e);
           setErrorMsg(`Erro ao resetar: ${e.message}`);
           setApiStatus('ERROR');
       } finally {
@@ -97,9 +104,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           if (response.ok) {
               const data = await response.json();
               
-              // DEBUG: Mostra exatamente o que a API devolveu no console do navegador (F12)
-              console.log("[IntegrationModal] API Response:", data);
-
               // Tenta ler 'state' (novo padrão) ou 'status' (antigo)
               let rawStatus = data.instance?.state || data.instance?.status;
               
@@ -124,13 +128,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
 
               // 2. Atualiza QR Code se disponível e status não for conectado
-              // Se status for 'connecting', 'close' ou 'qrcode', mostramos o QR Code
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
               }
           } else {
-              setApiStatus(`HTTP ${response.status}`);
+              // Se der 404 aqui, significa que a sessão caiu ou não existe. Paramos o polling.
+              if (response.status === 404) {
+                  setApiStatus('NOT FOUND');
+                  stopPolling();
+              } else {
+                  setApiStatus(`HTTP ${response.status}`);
+              }
           }
       } catch (e) {
           console.error("Polling error:", e);
@@ -151,7 +160,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         await fetch(`${gatewayUrl}/instance/logout/${sessionName}`, {
             method: 'DELETE', headers: { 'apikey': secretKey }
         });
-      } catch (e) { /* Ignora erro de logout */ }
+      } catch (e) { /* Ignora */ }
 
       // 1. Tenta criar a Instância
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
@@ -160,17 +169,24 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         body: JSON.stringify({ instanceName: sessionName, qrcode: true })
       });
 
-      if (!createResponse.ok && createResponse.status !== 403) {
-         console.warn("Status criação:", createResponse.status);
-         // Se der erro 403, provavelmente já existe, então seguimos para o connect
+      if (!createResponse.ok) {
+         // Se der 403 (Forbidden), geralmente significa que a instância já existe.
+         // Nesse caso, não é um erro fatal, apenas tentamos conectar nela.
+         if (createResponse.status === 403 || createResponse.status === 409) {
+             console.log("Instância já existe, prosseguindo para conexão...");
+         } else {
+             const errText = await createResponse.text().catch(() => '');
+             throw new Error(`Erro ao criar (${createResponse.status}): ${errText}`);
+         }
       }
 
       // 2. Inicia o Polling para buscar o QR Code novo
-      startPolling();
+      // Pequeno delay para dar tempo da API processar a criação
+      setTimeout(() => startPolling(), 1000);
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique a URL do Gateway.`);
+      setErrorMsg(`Falha: ${err.message}. Verifique se o Gateway está online em ${gatewayUrl}`);
       setIsLoading(false);
       setApiStatus('ERROR');
     } finally {

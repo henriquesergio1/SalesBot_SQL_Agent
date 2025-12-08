@@ -331,10 +331,15 @@ async function executeToolCall(name, args) {
             
             // Se o escopo for 'day', filtramos pela data exata
             if (scope === 'day') {
+                // A query base já tem WHERE ..., precisamos adicionar o AND x.DataVisita
+                // Vamos usar replace para injetar o filtro, já que a query é fixa
                 finalQuery = finalQuery.replace(
                     "-- AND x.DataVisita = @targetDate", 
                     "AND x.DataVisita = @targetDate"
                 );
+            } else {
+                // Se for 'month', NÃO filtramos por dia específico, trazendo a base toda do período
+                // A query já está preparada para trazer o mês todo nas CTEs, só o filtro final que removemos
             }
 
             const result = await request.query(finalQuery);
@@ -344,9 +349,10 @@ async function executeToolCall(name, args) {
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
             
-            // LISTA PARA CHAT (Limitada a 50)
+            // CRITICAL: Lista para o Chat do WhatsApp
+            // Aumentamos o limite para 50 para trazer mais clientes na lista de "faltam cobrir"
             const listaSimples = result.recordset
-                .filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true) 
+                .filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true) // Se for mensal, foca nos pendentes
                 .slice(0, 50)
                 .map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
 
@@ -359,13 +365,14 @@ async function executeToolCall(name, args) {
                 total_clientes_base: total,
                 ja_compraram_mes: positivados,
                 pendentes_cobertura: pendentes,
+                // Injetamos a lista aqui para a IA ler
                 LISTA_CLIENTES: listaSimples,
                 status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.`
             };
 
             return {
                 ai_response: summary, 
-                frontend_data: result.recordset,
+                frontend_data: result.recordset, // Frontend sempre recebe tudo para tabela
                 debug_meta: { period: scope === 'day' ? date : 'Mês Atual', filters: [`Vendedor ${args.sellerId}`], sqlLogic: scope === 'month' ? 'Base Mensal' : 'Rota Diária' }
             };
         }
@@ -380,6 +387,7 @@ async function executeToolCall(name, args) {
             return {
                 ai_response: { 
                     oportunidades_encontradas: result.recordset.length, 
+                    // Lista simples para o Chat
                     lista_produtos_sugeridos: listaProdutos 
                 },
                 frontend_data: result.recordset,
@@ -387,7 +395,7 @@ async function executeToolCall(name, args) {
             };
         }
 
-        // TOOL 3: VENDAS
+        // TOOL 3: VENDAS (OTIMIZADO + COBERTURA)
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -400,10 +408,12 @@ async function executeToolCall(name, args) {
 
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
+
             if (args.line) {
                 const cleanLine = args.line.toUpperCase().replace('LINHA', '').trim();
                 request.input('line', sql.VarChar, `%${cleanLine}%`);
             }
+            
             if (args.origin) request.input('origin', sql.VarChar, `%${args.origin}%`);
             if (args.city) request.input('city', sql.VarChar, `%${args.city}%`);
             if (args.productGroup) request.input('productGroup', sql.VarChar, `%${args.productGroup}%`);
@@ -543,6 +553,8 @@ async function executeToolCall(name, args) {
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
                 
+                // CRITICAL: Se for top list (clientes, produtos), envia lista simples pra IA também
+                // Aumentado slice para 50 para satisfazer pedido de listas maiores
                 if (aggResult.recordset.length > 0) {
                      aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => 
                         `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`
@@ -610,7 +622,10 @@ async function runChatAgent(userMessage, history = []) {
             const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
             
             if (toolResult && toolResult.frontend_data) {
+                // Preserva metadados de Cobertura/Visitas para o Frontend
                 const rows = toolResult.frontend_data;
+                const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
+                
                 dataForFrontend = { 
                     samples: rows,
                     debugMeta: toolResult.debug_meta,
@@ -643,7 +658,13 @@ async function runChatAgent(userMessage, history = []) {
 // ==================================================================================
 
 app.get('/api/v1/health', async (req, res) => {
-    res.json({ status: 'online', sql: 'connected', ai: 'ok' });
+    try {
+        const pool = await sql.connect(sqlConfig);
+        await pool.request().query('SELECT 1');
+        res.json({ status: 'online', sql: 'connected', ai: 'ok' });
+    } catch (e) {
+        res.json({ status: 'online', sql: 'error', error: e.message });
+    }
 });
 
 app.post('/api/v1/chat', async (req, res) => {
@@ -653,13 +674,16 @@ app.post('/api/v1/chat', async (req, res) => {
         let formattedData = null;
         if (response.data && response.data.samples) {
             const rows = response.data.samples;
+            
+            // Lógica para diferenciar tipos de dados (Vendas vs Visitas vs Oportunidades)
+            // Se tiver 'data_visita' ou 'data_visita_ref', é visita.
             const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
 
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
-                totalCoverage: response.data.totalCoverage, 
+                totalCoverage: response.data.totalCoverage, // Envia cobertura para o Dashboard
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],
@@ -679,22 +703,17 @@ app.post('/api/v1/chat', async (req, res) => {
 });
 
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    // Retornar 200 OK imediatamente para a Evolution API V2
-    // Se não retornar rápido, a API marca o webhook como falho e desconecta
-    res.status(200).json({ status: 'queued' });
+    const data = req.body;
+    const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
+    const sender = data.data?.key?.remoteJid;
+    const instance = data.instance || 'vendas_bot';
 
-    try {
-        const data = req.body;
-        // Estrutura Evolution V2
-        const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
-        const sender = data.data?.key?.remoteJid;
-        const instance = data.instance || 'vendas_bot';
-
-        if (msg && sender && !sender.includes('@g.us')) {
-            const resp = await runChatAgent(msg);
-            await sendWhatsappMessage(sender, resp.text, instance);
-        }
-    } catch (e) { console.error("Webhook processing error", e); }
+    if (msg && sender && !sender.includes('@g.us')) {
+        runChatAgent(msg).then(resp => {
+            sendWhatsappMessage(sender, resp.text, instance);
+        }).catch(err => sendWhatsappMessage(sender, `Erro: ${err.message}`, instance));
+    }
+    res.json({ status: 'ok' });
 });
 
 async function sendWhatsappMessage(to, text, session) {

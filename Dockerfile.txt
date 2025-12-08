@@ -8,17 +8,13 @@ WORKDIR /app
 RUN npm config set strict-ssl false
 RUN npm config set registry https://registry.npmjs.org/
 
-# Copia TODOS os arquivos primeiro
+COPY package.json ./
+
+# Instala dependências de forma limpa, ignorando o lockfile antigo para evitar conflitos
+RUN npm install --legacy-peer-deps --no-audit --no-package-lock
+
 COPY . .
 
-# CRÍTICO: Apaga node_modules e locks antigos do Windows/Host antes de instalar
-# Isso evita conflitos de binários (esbuild) entre Windows e Linux
-RUN rm -rf node_modules package-lock.json dist
-
-# Instala dependências do zero
-RUN npm install --legacy-peer-deps --no-audit
-
-# Executa o build (Agora sem conflitos do index.html)
 RUN npm run build
 
 # Estágio 2: Nginx

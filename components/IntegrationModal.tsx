@@ -21,8 +21,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
 
   // Referência para o intervalo de atualização
-  // USANDO 'any' PARA EVITAR ERRO DE BUILD (NodeJS.Timeout vs number)
-  const pollInterval = useRef<any>(null);
+  // TIPO: number | null para ser compatível estritamente com window.setInterval
+  const pollInterval = useRef<number | null>(null);
 
   // Limpa o intervalo se o modal fechar ou componente desmontar
   useEffect(() => {
@@ -31,8 +31,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   }, [isOpen]);
 
   const stopPolling = () => {
-    if (pollInterval.current) {
-        clearInterval(pollInterval.current);
+    if (pollInterval.current !== null) {
+        window.clearInterval(pollInterval.current);
         pollInterval.current = null;
     }
   };
@@ -40,7 +40,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const startPolling = () => {
       stopPolling(); // Garante limpeza anterior
       // Atualiza a cada 3 segundos (QR do WhatsApp dura ~20s)
-      pollInterval.current = setInterval(fetchSessionStatus, 3000); 
+      // Usa window.setInterval para garantir retorno numérico (Browsers) e evitar conflito com Node.js Types
+      pollInterval.current = window.setInterval(fetchSessionStatus, 3000); 
       fetchSessionStatus(); // Chama imediatamente
   };
 

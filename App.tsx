@@ -37,8 +37,9 @@ function App() {
         setHealth(status);
     };
     runCheck(); // Check inicial
-    const interval = setInterval(runCheck, 30000);
-    return () => clearInterval(interval);
+    // Use window.setInterval to avoid TypeScript conflict with NodeJS.Timeout
+    const interval = window.setInterval(runCheck, 30000);
+    return () => window.clearInterval(interval);
   }, [isSettingsOpen]); // Re-checa se fechar configurações (talvez mudou IP)
 
   const handleSend = async () => {
@@ -69,7 +70,8 @@ function App() {
       setMessages(prev => [...prev, botMsg]);
       
       if (response.data) {
-        setCurrentData(response.data);
+        // Explicitly handle undefined vs null for strict types
+        setCurrentData(response.data || null);
       }
     } catch (error) {
       console.error(error);

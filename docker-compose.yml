@@ -52,31 +52,36 @@ services:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
       
-      # FIX: Identidade padrão estável para evitar conflitos de versão
-      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
-      - CONFIG_SESSION_PHONE_NAME=Chrome
+      # FIX: Identidade alterada para evitar bloqueio de device_removed
+      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
+      - CONFIG_SESSION_PHONE_NAME=Desktop
       
-      # Configurações otimizadas para estabilidade
+      # FIX: Desativar Redis e Banco Local para forçar modo arquivo simples (mais estável)
+      - CACHE_REDIS_ENABLED=false
+      - DATABASE_ENABLED=false
+      
+      # Configurações de Estabilidade
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=ERROR
       - DEL_INSTANCE=true
       - QRCODE_LIMIT=30
+      - REJECT_CALLS=true
       
       # Webhooks
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
       - WEBHOOK_EVENTS_QRCODE_UPDATED=true
-      - WEBHOOK_EVENTS_MESSAGES_SET=true
+      - WEBHOOK_EVENTS_MESSAGES_SET=false
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+      - WEBHOOK_EVENTS_ERRORS=false
     volumes:
-      # Volumes v6 para garantir ambiente 100% limpo e remover sessões corrompidas (vendas/vendas01)
-      - evolution_instances_v6:/evolution/instances
-      - evolution_store_v6:/evolution/store
+      # Volumes v8_clean: Força reset total removendo qualquer lixo de sessão antiga
+      - evolution_instances_v8_clean:/evolution/instances
+      - evolution_store_v8_clean:/evolution/store
 
-# Serviço SQL Server REMOVIDO pois o sistema conecta em consulta.flagcloud.com.br
-
+# Volumes v8 garantem que não sobrou nada das tentativas vendas/vendas01 anteriores
 volumes:
-  evolution_instances_v6:
-  evolution_store_v6:
+  evolution_instances_v8_clean:
+  evolution_store_v8_clean:

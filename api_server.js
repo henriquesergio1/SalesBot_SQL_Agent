@@ -706,7 +706,7 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const data = req.body;
     const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
     const sender = data.data?.key?.remoteJid;
-    const instance = data.instance || 'vendas_bot';
+    const instance = data.instance || 'bot_v1'; // Default updated
 
     // Log detalhado para debug da conexão
     console.log("--- WEBHOOK RECEIVED ---");

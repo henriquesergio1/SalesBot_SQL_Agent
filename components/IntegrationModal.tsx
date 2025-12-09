@@ -9,7 +9,8 @@ interface IntegrationModalProps {
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
-  const [sessionName, setSessionName] = useState('vendas01');
+  // Mudamos o padrão para 'bot' para evitar conflito com 'vendas' antigo
+  const [sessionName, setSessionName] = useState('bot_v1'); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -44,7 +45,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   };
 
   const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const cleanValue = e.target.value.replace(/[^a-z0-9]/g, '').toLowerCase();
+      const cleanValue = e.target.value.replace(/[^a-z0-9_]/g, '').toLowerCase();
       setSessionName(cleanValue);
   };
 
@@ -302,7 +303,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         type="text" 
                         value={sessionName}
                         onChange={handleSessionNameChange}
-                        placeholder="ex: vendas01"
+                        placeholder="ex: bot_v1"
                         className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
                     />
                     <button 
@@ -313,7 +314,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         {isLoading && apiStatus === 'RESETTING...' ? '...' : 'Resetar'}
                     </button>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">Dica: Use 'vendas01' ou crie um nome único.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Dica: Use um nome NOVO se 'vendas' estiver travado.</p>
             </div>
             
             {errorMsg && (

@@ -58,22 +58,24 @@ services:
     restart: always
     ports:
       - "8082:8080"
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+    # Removido DNS manual para usar o do Host e evitar Timeouts de resolução
     environment:
       - SERVER_TYPE=http
       - SERVER_PORT=8080
-      # CORREÇÃO CRÍTICA: URL interna deve apontar para porta interna (8080)
       - SERVER_URL=http://whatsapp-gateway:8080
       
-      # Identidade do Navegador (Estabilidade)
-      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
-      - CONFIG_SESSION_PHONE_NAME=Chrome
+      # Prevenção de Crash (SIGSEGV)
+      - NODE_OPTIONS=--max-old-space-size=2048
       
-      # Performance: Desativar módulos não usados
+      # Identidade Segura (Linux/Ubuntu é mais estável em containers)
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Ubuntu
+      
+      # Otimizações
       - TYPEBOT_ENABLED=false
       - CHATWOOT_ENABLED=false
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
       
       # Segurança e CORS
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
@@ -99,8 +101,8 @@ services:
     depends_on:
       - evolution-db
     volumes:
-      - evolution_v2_instances:/evolution/instances
+      - evolution_v2_instances_clean_v11:/evolution/instances
 
 volumes:
   evolution_pg_data:
-  evolution_v2_instances:
+  evolution_v2_instances_clean_v11:

@@ -5,10 +5,13 @@ interface IntegrationModalProps {
   onClose: () => void;
 }
 
+// Gera ID aleatório para evitar sessões presas no banco
+const generateSessionId = () => `session_${Math.floor(Math.random() * 10000)}`;
+
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // Configuração Automática via Proxy (Mesma origem, rota /evolution)
   const [gatewayUrl, setGatewayUrl] = useState(`${window.location.origin}/evolution`);
-  const [sessionName, setSessionName] = useState('salesbot_v2'); 
+  const [sessionName, setSessionName] = useState(generateSessionId()); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -24,6 +27,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     // Reseta URL para o padrão seguro sempre que abre
     if (isOpen) {
         setGatewayUrl(`${window.location.origin}/evolution`);
+        // Gera um novo ID sugestivo se não estiver conectado ainda
+        if (!isConnected) setSessionName(generateSessionId());
     }
     return () => stopPolling();
   }, [isOpen]);
@@ -35,11 +40,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     }
   };
 
-  const startPolling = () => {
+  const startPolling = (targetSession: string) => {
       stopPolling(); 
       // Poll mais frequente para capturar o QR Code assim que disponível
-      pollInterval.current = setInterval(() => { fetchSessionStatus() }, 2000) as unknown as number;
-      fetchSessionStatus(); 
+      pollInterval.current = setInterval(() => { fetchSessionStatus(targetSession) }, 2000) as unknown as number;
+      fetchSessionStatus(targetSession); 
   };
 
   const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,10 +52,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setSessionName(cleanValue);
   };
 
-  const fetchSessionStatus = async () => {
+  const fetchSessionStatus = async (targetSession: string) => {
       try {
           const cleanUrl = gatewayUrl.replace(/\/$/, '');
-          const response = await fetch(`${cleanUrl}/instance/connect/${sessionName}`, {
+          const response = await fetch(`${cleanUrl}/instance/connect/${targetSession}`, {
             method: 'GET',
             headers: { 'apikey': secretKey }
           });
@@ -96,26 +101,22 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
+    // ESTRATÉGIA ANTI-TRAVAMENTO:
+    // Sempre gera uma sessão nova para garantir conexão limpa
+    const newSessionName = generateSessionId();
+    setSessionName(newSessionName);
+    
     const cleanUrl = gatewayUrl.replace(/\/$/, '');
     
     try {
-      setApiStatus('RESETTING...');
-      
-      // 1. DELETE (Limpeza forçada)
-      await fetch(`${cleanUrl}/instance/delete/${sessionName}`, {
-        method: 'DELETE',
-        headers: { 'apikey': secretKey }
-      }).catch(() => {}); 
-
-      await new Promise(r => setTimeout(r, 2000));
-
-      // 2. CREATE
       setApiStatus('INITIALIZING...');
+
+      // CREATE direto (sem delete, pois é nome novo)
       const createResponse = await fetch(`${cleanUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
         body: JSON.stringify({ 
-            instanceName: sessionName, 
+            instanceName: newSessionName, 
             qrcode: true,
             integration: "WHATSAPP-BAILEYS" 
         })
@@ -123,9 +124,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       if (!createResponse.ok) {
          const errText = await createResponse.text().catch(() => '');
-         if (createResponse.status !== 403 && createResponse.status !== 409) {
-             throw new Error(`Erro ${createResponse.status}: ${errText}`);
-         }
+         throw new Error(`Erro ${createResponse.status}: ${errText}`);
       } else {
           const createData = await createResponse.json().catch(() => ({}));
           if (createData.qrcode?.base64) {
@@ -135,12 +134,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
 
       setApiStatus('WAITING QR...');
-      // Inicia polling imediatamente
-      startPolling();
+      // Inicia polling na NOVA sessão
+      startPolling(newSessionName);
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha ao conectar: ${err.message}. Tente novamente em 10s.`);
+      setErrorMsg(`Falha ao conectar: ${err.message}. Tente novamente.`);
       setApiStatus('ERROR');
       setIsLoading(false);
     }
@@ -165,8 +164,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             
             <div className="bg-blue-50 border border-blue-100 p-3 rounded text-xs text-blue-800 flex justify-between items-center">
                 <span>
-                    <i className="fas fa-network-wired mr-1"></i>
-                    Configuração de Rede: Otimizada (DNS 8.8.8.8)
+                    <i className="fas fa-bolt mr-1"></i>
+                    Modo Turbo: Sessão Aleatória
                 </span>
             </div>
 
@@ -178,13 +177,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     </span>
                 </div>
 
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão (Gerado Automaticamente)</label>
                 <div className="flex gap-2">
                     <input 
                         type="text" 
                         value={sessionName}
-                        onChange={handleSessionNameChange}
-                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-white" 
+                        readOnly
+                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-500 bg-gray-100 cursor-not-allowed" 
                     />
                 </div>
             </div>
@@ -210,7 +209,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 {isLoading ? (
                                     <div className="flex flex-col items-center animate-pulse">
                                         <i className="fas fa-circle-notch fa-spin text-3xl text-whatsapp-teal mb-2"></i>
-                                        <p className="text-sm text-gray-500 font-medium">Iniciando Container...</p>
+                                        <p className="text-sm text-gray-500 font-medium">Criando nova sessão limpa...</p>
                                         <p className="text-xs text-gray-400">Aguardando handshake do WhatsApp</p>
                                     </div>
                                 ) : (
@@ -223,7 +222,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                             Gerar Novo QR Code
                                         </button>
                                         <p className="text-xs text-gray-400 max-w-xs text-center mt-2">
-                                            Isso resetará qualquer conexão travada e criará uma nova sessão limpa.
+                                            Cada clique gera uma sessão nova para evitar erros de conexão antiga.
                                         </p>
                                     </>
                                 )}
@@ -234,8 +233,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <img src={qrCodeData} alt="QR Code" className="w-64 h-64" />
                             </div>
                             <div className="mt-4 flex flex-col items-center gap-1">
-                                <p className="text-sm font-bold text-gray-700">Escaneie com seu WhatsApp</p>
-                                <p className="text-xs text-gray-500">Menu &gt; Aparelhos Conectados &gt; Conectar Aparelho</p>
+                                <p className="text-sm font-bold text-gray-700">Escaneie Agora</p>
+                                <p className="text-xs text-gray-500">Sessão: {sessionName}</p>
                             </div>
                         </div>
                     )}

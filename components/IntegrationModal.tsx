@@ -19,7 +19,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   
-  const [apiStatus, setApiStatus] = useState<string>('OFFLINE');
+  const [apiStatus, setApiStatus] = useState<string>('CHECKING...');
   const pollInterval = useRef<any>(null);
 
   useEffect(() => {
@@ -29,6 +29,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         setGatewayUrl(`${window.location.origin}/evolution`);
         // Gera um novo ID sugestivo se não estiver conectado ainda
         if (!isConnected) setSessionName(generateSessionId());
+        // Verifica status inicial
+        checkServerStatus();
     }
     return () => stopPolling();
   }, [isOpen]);
@@ -47,10 +49,32 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       fetchSessionStatus(targetSession); 
   };
 
-  const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const cleanValue = e.target.value.replace(/[^a-z0-9_]/g, '').toLowerCase();
-      setSessionName(cleanValue);
-  };
+  const checkServerStatus = async () => {
+      setApiStatus('CHECKING...');
+      try {
+          const cleanUrl = gatewayUrl.replace(/\/$/, '');
+          // Tenta buscar a sessão atual. Se der 404, o servidor está UP (mas sessão não existe).
+          const response = await fetch(`${cleanUrl}/instance/connect/${sessionName}`, {
+              method: 'GET',
+              headers: { 'apikey': secretKey }
+          });
+          
+          if (response.status === 404) {
+              setApiStatus('ONLINE (READY)');
+          } else if (response.status === 502 || response.status === 503) {
+              setApiStatus('STARTING DB...');
+          } else if (response.ok) {
+              setApiStatus('ONLINE');
+              // Se por acaso a sessão aleatória já existir (raro)
+              const data = await response.json();
+              if (data.instance?.status === 'open') setIsConnected(true);
+          } else {
+              setApiStatus(`HTTP ${response.status}`);
+          }
+      } catch (e) {
+          setApiStatus('OFFLINE / STARTING');
+      }
+  }
 
   const fetchSessionStatus = async (targetSession: string) => {
       try {
@@ -84,7 +108,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
           } else {
               if (response.status === 404) {
-                  setApiStatus('WAITING...');
+                  setApiStatus('CREATING...'); // Ainda não criada no banco
+              } else if (response.status === 502) {
+                  setApiStatus('DB STARTING...');
               } else {
                   setApiStatus(`HTTP ${response.status}`);
               }
@@ -139,7 +165,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha ao conectar: ${err.message}. Tente novamente.`);
+      setErrorMsg(`Falha ao conectar: ${err.message}. Verifique se o container está totalmente carregado.`);
       setApiStatus('ERROR');
       setIsLoading(false);
     }
@@ -172,7 +198,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Status da API</label>
                 <div className="flex gap-2 mb-3">
-                    <span className={`px-2 py-1 rounded text-xs font-bold w-full text-center ${apiStatus === 'OPEN' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                    <span className={`px-2 py-1 rounded text-xs font-bold w-full text-center transition-colors ${
+                        apiStatus.includes('ONLINE') || apiStatus.includes('OPEN') ? 'bg-green-100 text-green-700' : 
+                        apiStatus.includes('STARTING') ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-gray-100 text-gray-600'
+                    }`}>
                         {apiStatus}
                     </span>
                 </div>
@@ -216,10 +246,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                     <>
                                         <button 
                                             onClick={generateQrCode}
-                                            className="px-6 py-3 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2 shadow-lg w-full justify-center"
+                                            disabled={apiStatus.includes('STARTING')}
+                                            className={`px-6 py-3 text-white rounded-full transition flex items-center gap-2 shadow-lg w-full justify-center ${
+                                                apiStatus.includes('STARTING') ? 'bg-gray-400 cursor-not-allowed' : 'bg-whatsapp-dark hover:bg-whatsapp-teal'
+                                            }`}
                                         >
                                             <i className="fas fa-qrcode"></i>
-                                            Gerar Novo QR Code
+                                            {apiStatus.includes('STARTING') ? 'Aguardando Banco...' : 'Gerar Novo QR Code'}
                                         </button>
                                         <p className="text-xs text-gray-400 max-w-xs text-center mt-2">
                                             Cada clique gera uma sessão nova para evitar erros de conexão antiga.

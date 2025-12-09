@@ -37,8 +37,22 @@ services:
       - SECRET_KEY=minha-senha-secreta-api
       # URL interna para comunicação docker-to-docker
       - GATEWAY_URL=http://whatsapp-gateway:8080
+    depends_on:
+      - whatsapp-gateway
 
-  # 3. WhatsApp Gateway (Evolution API v2.1.1)
+  # 3. Database para Evolution API (Obrigatório na v2)
+  evolution-db:
+    image: postgres:15-alpine
+    container_name: evolution-db
+    restart: always
+    environment:
+      - POSTGRES_DB=evolution
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution_password
+    volumes:
+      - evolution_pg_data:/var/lib/postgresql/data
+
+  # 4. WhatsApp Gateway (Evolution API v2.1.1 - Stable)
   whatsapp-gateway:
     image: atendai/evolution-api:v2.1.1
     container_name: whatsapp-gateway
@@ -51,27 +65,29 @@ services:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       
-      # DATABASE (SQLite Nativo - Simples e Robusto)
-      - DATABASE_PROVIDER=sqlite
-      - DATABASE_CONNECTION_URI=file:./evolution.db
+      # DATABASE CONFIG (Postgres Connector)
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution_password@evolution-db:5432/evolution
+      - DATABASE_CLIENT_NAME=evolution_exchange
       
       # CONFIGURAÇÕES DA INSTÂNCIA
       - DEL_INSTANCE=false
       - LOG_LEVEL=error
       - QRCODE_LIMIT=30
       
-      # CONFIGURAÇÕES DE BROWSER (CRÍTICO PARA EVITAR 401)
+      # IDENTIFICAÇÃO (Estável)
       - CONFIG_SESSION_PHONE_CLIENT=SalesBot
       - CONFIG_SESSION_PHONE_NAME=Chrome
       
-      # Webhooks (Atualizado para v2)
+      # Webhooks
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+    depends_on:
+      - evolution-db
     volumes:
-      - evolution_v2_data:/evolution/store
       - evolution_v2_instances:/evolution/instances
 
 volumes:
-  evolution_v2_data:
+  evolution_pg_data:
   evolution_v2_instances:

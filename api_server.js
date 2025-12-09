@@ -607,14 +607,11 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const data = req.body;
     let msg, sender;
 
-    // Lógica para detecção segura do formato v2 ou v1
     try {
         if (data.data?.message) {
-            // Estrutura V2 Padrão
             msg = data.data.message.conversation || data.data.message.extendedTextMessage?.text;
             sender = data.data.key.remoteJid;
         } else if (data.data?.key) {
-            // Estrutura alternativa
             sender = data.data.key.remoteJid;
         }
     } catch(e) { console.log("Webhook parse fail", e); }
@@ -631,22 +628,23 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// SEND MESSAGE UPDATE FOR EVOLUTION V2
+// SEND MESSAGE UPDATE FOR EVOLUTION V2 (STRICT)
 async function sendWhatsappMessage(to, text, session) {
     const gatewayUrl = process.env.GATEWAY_URL || 'http://whatsapp-gateway:8080'; 
     const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
     const number = to.replace('@s.whatsapp.net', '');
     
     try {
-        // Endpoint V2: /message/send/text/{instance}
-        // Body V2: { number, text, options: { delay } }
+        // Envio estritamente compatível com JSON v2
         const response = await fetch(`${gatewayUrl}/message/send/text/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify({ 
                 number: number, 
-                text: text, 
-                delay: 1200 
+                text: text, // Campo simplificado aceito pela maioria das builds v2
+                options: {
+                    delay: 1200
+                }
             })
         });
         

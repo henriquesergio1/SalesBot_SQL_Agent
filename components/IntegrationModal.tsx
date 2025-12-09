@@ -125,8 +125,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   // Verifica estabilidade da conexão (Handshake)
   const verifyStability = async () => {
       setApiStatus('HANDSHAKE...');
-      // AUMENTADO PARA 15s para garantir que pegamos erros tardios de device_removed
-      await new Promise(r => setTimeout(r, 15000));
+      // AUMENTADO PARA 20s para garantir que pegamos erros tardios de device_removed
+      await new Promise(r => setTimeout(r, 20000));
       
       try {
         const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
@@ -224,7 +224,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         });
       } catch (e) { /* Ignora */ }
       
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 2000)); // Delay aumentado para dar tempo de limpeza
 
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
@@ -241,7 +241,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
          }
       }
 
-      setTimeout(() => startPolling(), 1000);
+      setTimeout(() => startPolling(), 1500);
 
     } catch (err: any) {
       console.error(err);
@@ -341,7 +341,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <div className="text-center">
                                     <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                                     <p className="text-blue-600 font-bold">Validando conexão...</p>
-                                    <p className="text-xs text-gray-500 animate-pulse">Aguarde 15 segundos para confirmação final.</p>
+                                    <p className="text-xs text-gray-500 animate-pulse">Aguarde 20 segundos para confirmação final.</p>
                                 </div>
                             ) : (
                                 <button 

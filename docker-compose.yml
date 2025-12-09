@@ -52,9 +52,8 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      # Configuração de Identidade para evitar desconexão 401
-      - CONFIG_SESSION_PHONE_CLIENT=Sales Bot
-      - CONFIG_SESSION_PHONE_NAME=Chrome
+      # REMOVIDO: CONFIG_SESSION_PHONE_CLIENT e NAME para usar identidade padrão (Chrome/Baileys)
+      # Isso evita o erro 'device_removed' (401)
       
       # Configurações otimizadas para estabilidade
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
@@ -69,10 +68,11 @@ services:
       - WEBHOOK_EVENTS_QRCODE_UPDATED=true
       - WEBHOOK_EVENTS_MESSAGES_SET=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+      - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
     volumes:
-      # Volumes v4 para garantir ambiente 100% limpo
-      - evolution_instances_v4:/evolution/instances
-      - evolution_store_v4:/evolution/store
+      # Volumes v5 para garantir ambiente 100% limpo com a nova configuração
+      - evolution_instances_v5:/evolution/instances
+      - evolution_store_v5:/evolution/store
 
   # 4. SQL Server (Banco de Dados Local)
   sql-server:
@@ -89,5 +89,5 @@ services:
 
 volumes:
   sql_data:
-  evolution_instances_v4:
-  evolution_store_v4:
+  evolution_instances_v5:
+  evolution_store_v5:

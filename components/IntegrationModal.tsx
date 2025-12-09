@@ -125,8 +125,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   // Verifica estabilidade da conexão (Handshake)
   const verifyStability = async () => {
       setApiStatus('HANDSHAKE...');
-      // AUMENTADO PARA 10s para pegar o erro 'device_removed' que ocorre após 7s
-      await new Promise(r => setTimeout(r, 10000));
+      // AUMENTADO PARA 15s para garantir que pegamos erros tardios de device_removed
+      await new Promise(r => setTimeout(r, 15000));
       
       try {
         const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}?_t=${Date.now()}`, {
@@ -141,8 +141,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             setErrorMsg(null);
             stopPolling();
         } else {
-            setApiStatus('RETRYING...'); // Caiu durante o handshake
+            setApiStatus('RETRYING...'); // Caiu durante o handshake (ex: device_removed)
             // Não para o polling, deixa tentar pegar o QR Code de novo na próxima volta
+            setErrorMsg("Conexão instável. O WhatsApp recusou a sessão. Tentando reconectar...");
         }
       } catch (e) {
           console.error(e);
@@ -340,7 +341,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <div className="text-center">
                                     <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                                     <p className="text-blue-600 font-bold">Validando conexão...</p>
-                                    <p className="text-xs text-gray-500 animate-pulse">Aguarde 10 segundos para confirmação final.</p>
+                                    <p className="text-xs text-gray-500 animate-pulse">Aguarde 15 segundos para confirmação final.</p>
                                 </div>
                             ) : (
                                 <button 

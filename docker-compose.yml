@@ -58,12 +58,24 @@ services:
     restart: always
     ports:
       - "8082:8080"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - SERVER_TYPE=http
       - SERVER_PORT=8080
-      - SERVER_URL=http://localhost:8082
+      # CORREÇÃO CRÍTICA: URL interna deve apontar para porta interna (8080)
+      - SERVER_URL=http://whatsapp-gateway:8080
       
-      # Segurança e CORS (Importante para evitar bloqueios)
+      # Identidade do Navegador (Estabilidade)
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      
+      # Performance: Desativar módulos não usados
+      - TYPEBOT_ENABLED=false
+      - CHATWOOT_ENABLED=false
+      
+      # Segurança e CORS
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - CORS_ORIGIN=*
@@ -78,6 +90,7 @@ services:
       - DEL_INSTANCE=false
       - LOG_LEVEL=error
       - QRCODE_LIMIT=30
+      - WEBSOCKET_PING_INTERVAL=20000
       
       # Webhooks
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook

@@ -10,7 +10,6 @@ interface IntegrationModalProps {
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
-  // Mudamos o padrão para 'salesbot_v2' compatível com Evolution V2
   const [sessionName, setSessionName] = useState('salesbot_v2'); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
@@ -45,40 +44,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       setSessionName(cleanValue);
   };
 
-  const resetInstance = async () => {
-      if (!window.confirm("Isso irá apagar a sessão 'v2' e recriar. Confirmar?")) return;
-      
-      stopPolling();
-      setIsLoading(true);
-      setErrorMsg(null);
-      setQrCodeData(null);
-      setIsConnected(false);
-      setApiStatus('RESETTING...');
-      
-      try {
-          // Evolution V2 Delete
-          const res = await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
-              method: 'DELETE',
-              headers: { 'apikey': secretKey }
-          });
-          
-          if (!res.ok && res.status !== 404) {
-               console.log("Delete failed or not found, continuing...");
-          }
-
-          setApiStatus('CLEANING...');
-          await new Promise(r => setTimeout(r, 2000));
-          
-          setErrorMsg("✅ Sessão limpa. Gerando nova instância V2...");
-          generateQrCode();
-
-      } catch (e: any) {
-          console.error(e);
-          setErrorMsg(`Erro ao resetar: ${e.message}`);
-          setIsLoading(false);
-      }
-  }
-
   const fetchSessionStatus = async () => {
       try {
           // Endpoint V2 compatible
@@ -89,12 +54,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
           if (response.ok) {
               const data = await response.json();
-              // V2: data.instance.state, data.base64
+              // V2 structure: { instance: { state: 'open'|'connecting'|'close' }, base64: '...' }
               
-              let rawStatus = data.instance?.state || data.instance?.status;
-              if (!rawStatus && data.base64) rawStatus = 'QRCODE';
-              
-              if (!rawStatus) rawStatus = 'UNKNOWN';
+              const rawStatus = data.instance?.state || data.instance?.status || 'UNKNOWN';
               const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
               
               setApiStatus(currentStatus.toUpperCase());
@@ -107,12 +69,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return;
               }
               
-              if (currentStatus === 'connecting') {
-                  setQrCodeData(null);
-                  setIsConnected(false); 
-                  return;
-              }
-
+              // Se tiver base64, mostramos, independente do status ser connecting ou close
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
@@ -120,7 +77,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           } else {
               if (response.status === 404) {
                   setApiStatus('NOT FOUND');
-                  stopPolling();
+                  // Não paramos o polling se for 404 logo após criar, pois pode estar subindo
               } else {
                   setApiStatus(`HTTP ${response.status}`);
               }
@@ -136,10 +93,21 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setErrorMsg(null);
     setQrCodeData(null);
     setIsConnected(false);
-    setApiStatus('STARTING V2...');
     
     try {
-      // Create Instance V2
+      // 1. FORCE DELETE (Limpeza Preventiva)
+      setApiStatus('CLEANING...');
+      console.log("Tentando deletar instância antiga...");
+      await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
+        method: 'DELETE',
+        headers: { 'apikey': secretKey }
+      }).catch(e => console.log("Delete error (ignored):", e));
+
+      // Delay para garantir que o banco liberou o nome
+      await new Promise(r => setTimeout(r, 2000));
+
+      // 2. CREATE NEW INSTANCE
+      setApiStatus('CREATING...');
       const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
@@ -151,23 +119,26 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       });
 
       if (!createResponse.ok) {
+         const errText = await createResponse.text().catch(() => '');
+         // Se ainda der erro de duplicidade, tentamos conectar direto
          if (createResponse.status === 403 || createResponse.status === 409) {
-             console.log("Instância já existe, prosseguindo...");
+             console.log("Instância ainda existe, tentando conectar...");
          } else {
-             const errText = await createResponse.text().catch(() => '');
-             throw new Error(`Erro V2 (${createResponse.status}): ${errText}`);
+             throw new Error(`Erro ao criar (${createResponse.status}): ${errText}`);
          }
       }
 
-      setTimeout(() => startPolling(), 1500);
+      setApiStatus('WAITING QR...');
+      setTimeout(() => startPolling(), 1000);
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique se o container V2 está rodando.`);
+      setErrorMsg(`Falha: ${err.message}. Verifique o container whatsapp-gateway.`);
       setIsLoading(false);
       setApiStatus('ERROR');
     } finally {
-        setTimeout(() => setIsLoading(false), 500);
+        // Mantemos loading visual por mais um tempo
+        setTimeout(() => setIsLoading(false), 1000);
     }
   };
 
@@ -212,12 +183,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         onChange={handleSessionNameChange}
                         className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50" 
                     />
-                    <button 
-                        onClick={resetInstance}
-                        className="px-3 bg-red-100 text-red-600 rounded hover:bg-red-200 border border-red-200 text-xs font-bold uppercase transition"
-                    >
-                        Resetar
-                    </button>
                 </div>
             </div>
             
@@ -238,15 +203,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             ) : (
                 <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded border-2 border-dashed min-h-[200px]">
                     {!qrCodeData ? (
-                        <div className="flex flex-col items-center">
+                        <div className="flex flex-col items-center gap-3">
                                 <button 
                                     onClick={generateQrCode}
                                     disabled={isLoading}
-                                    className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2"
+                                    className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2 disabled:opacity-50"
                                 >
                                     {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-qrcode"></i>}
-                                    {isLoading ? 'Iniciando Engine V2...' : 'Gerar QR Code V2'}
+                                    {isLoading ? 'Reiniciando Sessão...' : 'Gerar Novo QR Code'}
                                 </button>
+                                <p className="text-xs text-gray-400 max-w-xs text-center">
+                                    Isso irá resetar qualquer sessão travada e gerar um novo código.
+                                </p>
                         </div>
                     ) : (
                         <div className="text-center animate-fade-in flex flex-col items-center">
@@ -257,6 +225,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-600">
                                     STATUS: {apiStatus}
                                 </span>
+                                <p className="text-xs text-gray-500">Escaneie com seu WhatsApp</p>
                             </div>
                         </div>
                     )}

@@ -9,8 +9,8 @@ interface IntegrationModalProps {
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
-  // Mudamos o padrão para 'bot' para evitar conflito com 'vendas' antigo
-  const [sessionName, setSessionName] = useState('bot_v1'); 
+  // Mudamos o padrão para 'sessao_final_v1' para garantir limpeza
+  const [sessionName, setSessionName] = useState('sessao_final_v1'); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -303,7 +303,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         type="text" 
                         value={sessionName}
                         onChange={handleSessionNameChange}
-                        placeholder="ex: bot_v1"
+                        placeholder="ex: sessao_final_v1"
                         className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
                     />
                     <button 
@@ -314,7 +314,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         {isLoading && apiStatus === 'RESETTING...' ? '...' : 'Resetar'}
                     </button>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">Dica: Use um nome NOVO se 'vendas' estiver travado.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Dica: Use um nome NOVO se a sessão antiga travou.</p>
             </div>
             
             {errorMsg && (

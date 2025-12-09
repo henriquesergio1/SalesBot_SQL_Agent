@@ -52,18 +52,19 @@ services:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
       
-      # FIX: Identidade alterada para evitar bloqueio de device_removed
-      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
-      - CONFIG_SESSION_PHONE_NAME=Desktop
+      # FIX CRITICO: Identidade deve ser PADRÃO para evitar bloqueio 401/device_removed
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Chrome
       
-      # FIX: Desativar Redis e Banco Local para forçar modo arquivo simples (mais estável)
+      # FIX: Desativar Redis e Banco Local para forçar modo arquivo simples
       - CACHE_REDIS_ENABLED=false
       - DATABASE_ENABLED=false
       
       # Configurações de Estabilidade
+      # FIX: DEL_INSTANCE=false para evitar loop de reinicialização se der erro
+      - DEL_INSTANCE=false
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
       - LOG_LEVEL=ERROR
-      - DEL_INSTANCE=true
       - QRCODE_LIMIT=30
       - REJECT_CALLS=true
       
@@ -77,11 +78,11 @@ services:
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
       - WEBHOOK_EVENTS_ERRORS=false
     volumes:
-      # Volumes v8_clean: Força reset total removendo qualquer lixo de sessão antiga
-      - evolution_instances_v8_clean:/evolution/instances
-      - evolution_store_v8_clean:/evolution/store
+      # Volumes v9_final: Instalação 100% limpa
+      - evolution_instances_v9_final:/evolution/instances
+      - evolution_store_v9_final:/evolution/store
 
-# Volumes v8 garantem que não sobrou nada das tentativas vendas/vendas01 anteriores
+# Volumes v9 garantem limpeza total
 volumes:
-  evolution_instances_v8_clean:
-  evolution_store_v8_clean:
+  evolution_instances_v9_final:
+  evolution_store_v9_final:

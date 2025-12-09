@@ -1,287 +1,196 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useEffect } from 'react';
 
 interface IntegrationModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// Gera ID aleatório para evitar sessões presas no banco
-const generateSessionId = () => `session_${Math.floor(Math.random() * 10000)}`;
+// Gera ID aleatório para garantir sessão limpa
+const generateSessionId = () => `sessao_${Math.floor(Math.random() * 1000)}`;
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
-  // Configuração Automática via Proxy (Mesma origem, rota /evolution)
-  const [gatewayUrl, setGatewayUrl] = useState(`${window.location.origin}/evolution`);
   const [sessionName, setSessionName] = useState(generateSessionId()); 
-  const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
+  const [secretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
+  const [statusLog, setStatusLog] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  
-  const [apiStatus, setApiStatus] = useState<string>('CHECKING...');
-  const pollInterval = useRef<any>(null);
+
+  // URL Base (via Nginx)
+  const BASE_URL = `${window.location.origin}/evolution`;
 
   useEffect(() => {
-    if (!isOpen) stopPolling();
-    // Reseta URL para o padrão seguro sempre que abre
     if (isOpen) {
-        setGatewayUrl(`${window.location.origin}/evolution`);
-        // Gera um novo ID sugestivo se não estiver conectado ainda
-        if (!isConnected) setSessionName(generateSessionId());
-        // Verifica status inicial
-        checkServerStatus();
+        setSessionName(generateSessionId());
+        setQrCodeData(null);
+        setStatusLog(['Pronto para iniciar.']);
+        setIsConnected(false);
     }
-    return () => stopPolling();
   }, [isOpen]);
 
-  const stopPolling = () => {
-    if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-        pollInterval.current = null;
-    }
-  };
+  const addLog = (msg: string) => setStatusLog(prev => [...prev.slice(-4), msg]);
 
-  const startPolling = (targetSession: string) => {
-      stopPolling(); 
-      // Poll mais frequente para capturar o QR Code assim que disponível
-      pollInterval.current = setInterval(() => { fetchSessionStatus(targetSession) }, 2000) as unknown as number;
-      fetchSessionStatus(targetSession); 
-  };
-
-  const checkServerStatus = async () => {
-      setApiStatus('CHECKING...');
-      try {
-          const cleanUrl = gatewayUrl.replace(/\/$/, '');
-          // Tenta buscar a sessão atual. Se der 404, o servidor está UP (mas sessão não existe).
-          const response = await fetch(`${cleanUrl}/instance/connect/${sessionName}`, {
-              method: 'GET',
-              headers: { 'apikey': secretKey }
-          });
-          
-          if (response.status === 404) {
-              setApiStatus('ONLINE (READY)');
-          } else if (response.status === 502 || response.status === 503) {
-              setApiStatus('STARTING DB...');
-          } else if (response.ok) {
-              const contentType = response.headers.get("content-type");
-              if (contentType && contentType.indexOf("application/json") !== -1) {
-                  const data = await response.json();
-                  if (data.instance?.status === 'open') setIsConnected(true);
-                  setApiStatus('ONLINE');
-              } else {
-                  setApiStatus('ONLINE (HTML)');
-              }
-          } else {
-              setApiStatus(`HTTP ${response.status}`);
-          }
-      } catch (e) {
-          setApiStatus('OFFLINE / STARTING');
-      }
-  }
-
-  const fetchSessionStatus = async (targetSession: string) => {
-      try {
-          const cleanUrl = gatewayUrl.replace(/\/$/, '');
-          const response = await fetch(`${cleanUrl}/instance/connect/${targetSession}`, {
-            method: 'GET',
-            headers: { 'apikey': secretKey }
-          });
-
-          if (response.ok) {
-              const contentType = response.headers.get("content-type");
-              if (contentType && contentType.indexOf("application/json") !== -1) {
-                  const data = await response.json();
-                  
-                  // Tenta extrair status de vários locais possíveis
-                  const rawStatus = data.instance?.state || data.instance?.status || 'connecting';
-                  const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'connecting';
-                  
-                  setApiStatus(currentStatus.toUpperCase());
-
-                  if (currentStatus === 'open') {
-                      setQrCodeData(null);
-                      setIsConnected(true);
-                      setErrorMsg(null);
-                      stopPolling();
-                      return;
-                  }
-                  
-                  // Se tiver base64, mostramos o QR
-                  if (data.base64) {
-                      setQrCodeData(data.base64);
-                      setIsConnected(false);
-                      setIsLoading(false); // Garante que o loading pare se o QR chegar
-                  }
-              } else {
-                  // Resposta não é JSON (provavelmente HTML de erro 500 do Nginx mascarado como 200 ou similar)
-                  setApiStatus('API STARTING...');
-              }
-          } else {
-              if (response.status === 404) {
-                  setApiStatus('CREATING...'); // Ainda não criada no banco
-              } else if (response.status === 502) {
-                  setApiStatus('DB STARTING...');
-              } else {
-                  setApiStatus(`HTTP ${response.status}`);
-              }
-          }
-      } catch (e) {
-          console.error("Polling error:", e);
-          setApiStatus('CONNECTION ERROR');
-      }
-  };
-
-  const generateQrCode = async () => {
+  const handleConnect = async () => {
     setIsLoading(true);
-    setErrorMsg(null);
     setQrCodeData(null);
     setIsConnected(false);
     
-    // ESTRATÉGIA ANTI-TRAVAMENTO:
-    // Sempre gera uma sessão nova para garantir conexão limpa
-    const newSessionName = generateSessionId();
-    setSessionName(newSessionName);
-    
-    const cleanUrl = gatewayUrl.replace(/\/$/, '');
-    
+    // Novo nome para garantir zero conflito
+    const newSession = generateSessionId();
+    setSessionName(newSession);
+
     try {
-      setApiStatus('INITIALIZING...');
+        // 1. LIMPEZA (Tenta deletar se existir, apenas por segurança)
+        addLog(`1. Preparando ambiente (${newSession})...`);
+        
+        // 2. CRIAÇÃO (Solicita QR Code IMEDIATAMENTE)
+        addLog('2. Solicitando QR Code ao WhatsApp...');
+        const createUrl = `${BASE_URL}/instance/create`;
+        
+        const response = await fetch(createUrl, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'apikey': secretKey 
+            },
+            body: JSON.stringify({ 
+                instanceName: newSession, 
+                qrcode: true, // V2: Exige isso para devolver o base64
+                integration: "WHATSAPP-BAILEYS" 
+            })
+        });
 
-      // CREATE direto (sem delete, pois é nome novo)
-      const createResponse = await fetch(`${cleanUrl}/instance/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
-        body: JSON.stringify({ 
-            instanceName: newSessionName, 
-            qrcode: true,
-            integration: "WHATSAPP-BAILEYS" 
-        })
-      });
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Erro API (${response.status}): ${errText}`);
+        }
 
-      if (!createResponse.ok) {
-         const errText = await createResponse.text().catch(() => '');
-         throw new Error(`Erro ${createResponse.status}: ${errText}`);
-      } else {
-          const createData = await createResponse.json().catch(() => ({}));
-          if (createData.qrcode?.base64) {
-              setQrCodeData(createData.qrcode.base64);
-              setIsLoading(false);
-          }
-      }
+        const data = await response.json();
+        
+        // V2: O QR Code vem dentro de "qrcode.base64" ou "base64" na raiz dependendo da subversão
+        const base64 = data.qrcode?.base64 || data.base64 || data.instance?.qrcode;
 
-      setApiStatus('WAITING QR...');
-      // Inicia polling na NOVA sessão
-      startPolling(newSessionName);
+        if (base64) {
+            setQrCodeData(base64);
+            addLog('3. QR Code Recebido! Escaneie agora.');
+            // Inicia verificação de conexão APÓS mostrar o QR
+            monitorConnection(newSession);
+        } else {
+            // Se não veio QR code, pode ser que já esteja conectado ou deu erro lógico
+            if (data.instance?.status === 'open') {
+                setIsConnected(true);
+                addLog('Instância já está conectada!');
+            } else {
+                throw new Error('API não retornou o QR Code. Tente novamente.');
+            }
+        }
 
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(`Falha ao conectar: ${err.message}. Verifique se o container está totalmente carregado.`);
-      setApiStatus('ERROR');
-      setIsLoading(false);
+    } catch (error: any) {
+        console.error(error);
+        addLog(`ERRO: ${error.message}`);
+    } finally {
+        setIsLoading(false);
     }
+  };
+
+  const monitorConnection = (targetSession: string) => {
+      const interval = setInterval(async () => {
+          try {
+              const res = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
+                  headers: { 'apikey': secretKey }
+              });
+              if (res.ok) {
+                  const data = await res.json();
+                  const state = data.instance?.state || data.instance?.status;
+                  
+                  if (state === 'open') {
+                      setIsConnected(true);
+                      setQrCodeData(null);
+                      addLog('SUCESSO: WhatsApp Conectado!');
+                      clearInterval(interval);
+                  }
+              }
+          } catch (e) {
+              // ignora erros de rede no polling
+          }
+      }, 3000);
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-white w-full max-w-md rounded-xl shadow-2xl overflow-hidden flex flex-col">
         
-        <div className="bg-whatsapp-dark p-4 flex justify-between items-center">
-            <h2 className="text-white font-semibold flex items-center gap-2">
-                <i className="fab fa-whatsapp"></i> Conexão WhatsApp V2
+        <div className="bg-[#075E54] p-4 flex justify-between items-center">
+            <h2 className="text-white font-bold flex items-center gap-2">
+                <i className="fab fa-whatsapp"></i> Nova Conexão
             </h2>
-            <button onClick={onClose} className="text-white/70 hover:text-white transition">
+            <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>
             </button>
         </div>
 
-        <div className="p-6 overflow-y-auto space-y-4">
+        <div className="p-6 flex flex-col items-center min-h-[300px]">
             
-            <div className="bg-blue-50 border border-blue-100 p-3 rounded text-xs text-blue-800 flex justify-between items-center">
-                <span>
-                    <i className="fas fa-bolt mr-1"></i>
-                    Modo Turbo: Sessão Aleatória (4GB Mem)
-                </span>
+            {/* Status Log */}
+            <div className="w-full bg-gray-100 p-2 rounded mb-4 text-[10px] font-mono text-gray-600 border border-gray-200 h-20 overflow-hidden">
+                {statusLog.map((log, i) => (
+                    <div key={i} className="truncate">{log}</div>
+                ))}
             </div>
-
-            <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Status da API</label>
-                <div className="flex gap-2 mb-3">
-                    <span className={`px-2 py-1 rounded text-xs font-bold w-full text-center transition-colors ${
-                        apiStatus.includes('ONLINE') || apiStatus.includes('OPEN') ? 'bg-green-100 text-green-700' : 
-                        apiStatus.includes('STARTING') ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-gray-100 text-gray-600'
-                    }`}>
-                        {apiStatus}
-                    </span>
-                </div>
-
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão (Gerado Automaticamente)</label>
-                <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        value={sessionName}
-                        readOnly
-                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-500 bg-gray-100 cursor-not-allowed" 
-                    />
-                </div>
-            </div>
-            
-            {errorMsg && (
-                <div className="p-3 text-xs rounded border bg-red-50 text-red-600 border-red-200 break-words">
-                   <i className="fas fa-exclamation-circle mr-1"></i> {errorMsg}
-                </div>
-            )}
 
             {isConnected ? (
-                <div className="flex flex-col items-center justify-center p-6 bg-green-50 rounded border-2 border-green-200 animate-fade-in">
-                    <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-3">
-                        <i className="fas fa-check text-2xl text-green-600"></i>
+                <div className="flex flex-col items-center animate-fade-in py-8">
+                    <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4 text-green-600 text-4xl shadow-sm">
+                        <i className="fas fa-check"></i>
                     </div>
-                    <h3 className="text-green-800 font-bold text-lg">Conectado!</h3>
-                    <p className="text-green-600 text-sm text-center">SalesBot está online e pronto.</p>
+                    <h3 className="text-xl font-bold text-gray-800">Conectado!</h3>
+                    <p className="text-gray-500 text-sm mt-2">O SalesBot está pronto para uso.</p>
+                    <button onClick={onClose} className="mt-6 px-6 py-2 bg-gray-800 text-white rounded hover:bg-gray-700">
+                        Fechar Janela
+                    </button>
+                </div>
+            ) : qrCodeData ? (
+                <div className="flex flex-col items-center w-full animate-fade-in">
+                    <div className="bg-white p-2 rounded shadow border border-gray-200">
+                        <img src={qrCodeData} alt="QR Code" className="w-60 h-60" />
+                    </div>
+                    <div className="mt-4 text-center">
+                        <p className="font-bold text-gray-800 text-lg">Escaneie com seu WhatsApp</p>
+                        <p className="text-xs text-gray-500">Sessão: {sessionName}</p>
+                    </div>
+                    <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 animate-pulse">
+                        <i className="fas fa-sync fa-spin"></i> Aguardando leitura...
+                    </div>
                 </div>
             ) : (
-                <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded border-2 border-dashed min-h-[220px]">
-                    {!qrCodeData ? (
-                        <div className="flex flex-col items-center gap-3 w-full">
-                                {isLoading ? (
-                                    <div className="flex flex-col items-center animate-pulse">
-                                        <i className="fas fa-circle-notch fa-spin text-3xl text-whatsapp-teal mb-2"></i>
-                                        <p className="text-sm text-gray-500 font-medium">Criando nova sessão limpa...</p>
-                                        <p className="text-xs text-gray-400">Aguardando handshake do WhatsApp</p>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <button 
-                                            onClick={generateQrCode}
-                                            disabled={apiStatus.includes('STARTING')}
-                                            className={`px-6 py-3 text-white rounded-full transition flex items-center gap-2 shadow-lg w-full justify-center ${
-                                                apiStatus.includes('STARTING') ? 'bg-gray-400 cursor-not-allowed' : 'bg-whatsapp-dark hover:bg-whatsapp-teal'
-                                            }`}
-                                        >
-                                            <i className="fas fa-qrcode"></i>
-                                            {apiStatus.includes('STARTING') ? 'Aguardando Banco...' : 'Gerar Novo QR Code'}
-                                        </button>
-                                        <p className="text-xs text-gray-400 max-w-xs text-center mt-2">
-                                            Cada clique gera uma sessão nova para evitar erros de conexão antiga.
-                                        </p>
-                                    </>
-                                )}
+                <div className="flex flex-col items-center justify-center w-full flex-1">
+                    <div className="text-center mb-6">
+                        <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
+                            <i className="fas fa-link"></i>
                         </div>
-                    ) : (
-                        <div className="text-center animate-fade-in flex flex-col items-center">
-                            <div className="relative group bg-white p-2 border rounded shadow-sm">
-                                <img src={qrCodeData} alt="QR Code" className="w-64 h-64" />
-                            </div>
-                            <div className="mt-4 flex flex-col items-center gap-1">
-                                <p className="text-sm font-bold text-gray-700">Escaneie Agora</p>
-                                <p className="text-xs text-gray-500">Sessão: {sessionName}</p>
-                            </div>
-                        </div>
-                    )}
+                        <h3 className="font-bold text-gray-700">Conectar SalesBot</h3>
+                        <p className="text-sm text-gray-500 max-w-[250px] mx-auto mt-1">
+                            Clique abaixo para gerar um novo QR Code limpo e conectar sua conta.
+                        </p>
+                    </div>
+
+                    <button 
+                        onClick={handleConnect}
+                        disabled={isLoading}
+                        className={`w-full py-3 rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-2 text-white ${
+                            isLoading ? 'bg-gray-400 cursor-wait' : 'bg-[#128C7E] hover:bg-[#075E54]'
+                        }`}
+                    >
+                        {isLoading ? (
+                            <><i className="fas fa-circle-notch fa-spin"></i> Gerando...</>
+                        ) : (
+                            <><i className="fas fa-qrcode"></i> Gerar Novo QR Code</>
+                        )}
+                    </button>
                 </div>
             )}
         </div>

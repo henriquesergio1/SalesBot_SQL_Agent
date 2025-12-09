@@ -1,7 +1,8 @@
+
 version: '3.8'
 
 services:
-  # 1. Frontend Application (O Painel React)
+  # 1. Frontend Application (Painel)
   salesbot-web:
     build:
       context: .
@@ -13,12 +14,11 @@ services:
     environment:
       - VITE_API_URL=/api/v1/query
       - VITE_GATEWAY_URL=/evolution
-      - VITE_USE_MOCK=false
     depends_on:
       - salesbot-api
       - whatsapp-gateway
 
-  # 2. SQL API Connector (Node.js + SQL Server + AI Agent Backend)
+  # 2. Backend API (Lógica do Bot)
   salesbot-api:
     build:
       context: .
@@ -34,12 +34,11 @@ services:
       - DB_NAME=flexx10071188
       - API_KEY=COLE_SUA_NOVA_CHAVE_AQUI
       - SECRET_KEY=minha-senha-secreta-api
-      # URL interna para comunicação docker-to-docker
       - GATEWAY_URL=http://whatsapp-gateway:8080
     depends_on:
       - whatsapp-gateway
 
-  # 3. Database para Evolution API (Obrigatório na v2)
+  # 3. Database (Obrigatório V2)
   evolution-db:
     image: postgres:15-alpine
     container_name: evolution-db
@@ -52,14 +51,13 @@ services:
       - POSTGRES_PASSWORD=evolution_password
     volumes:
       - evolution_pg_data:/var/lib/postgresql/data
-    # Healthcheck: Garante que o banco está PRONTO antes de liberar a API
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # 4. WhatsApp Gateway (Evolution API v2.1.1 - Stable)
+  # 4. WhatsApp Gateway (Evolution API v2.1.1)
   whatsapp-gateway:
     image: atendai/evolution-api:v2.1.1
     container_name: whatsapp-gateway
@@ -67,50 +65,40 @@ services:
     ports:
       - "8082:8080"
     environment:
-      - SERVER_TYPE=http
+      # Server Basics
       - SERVER_PORT=8080
       - SERVER_URL=http://whatsapp-gateway:8080
       
-      # Prevenção de Crash (SIGSEGV) - Aumentado para 4GB
-      - NODE_OPTIONS=--max-old-space-size=4096
-      
-      # Identidade Segura (Linux/Ubuntu é mais estável em containers)
-      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
-      - CONFIG_SESSION_PHONE_NAME=Ubuntu
-      
-      # Otimizações
-      - TYPEBOT_ENABLED=false
-      - CHATWOOT_ENABLED=false
-      - CACHE_REDIS_ENABLED=false
-      - CACHE_LOCAL_ENABLED=true
-      
-      # Segurança e CORS
-      - AUTHENTICATION_API_KEY=minha-senha-secreta-api
-      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
-      - CORS_ORIGIN=*
-      - CORS_METHODS=POST,GET,PUT,DELETE,OPTIONS
-      
-      # DATABASE CONFIG (Postgres Connector)
+      # Database
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution:evolution_password@evolution-db:5432/evolution
-      - DATABASE_CLIENT_NAME=evolution_exchange
       
-      # CONFIGURAÇÕES DA INSTÂNCIA
+      # Authentication
+      - AUTHENTICATION_API_KEY=minha-senha-secreta-api
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      
+      # Session & Cache (Local apenas, sem Redis)
+      - CACHE_LOCAL_ENABLED=true
+      - CACHE_REDIS_ENABLED=false
+      
+      # Performance & Logs
+      - LOG_LEVEL=warn
       - DEL_INSTANCE=false
-      - LOG_LEVEL=error
-      - QRCODE_LIMIT=30
-      - WEBSOCKET_PING_INTERVAL=20000
+      - NODE_OPTIONS=--max-old-space-size=4096
       
-      # Webhooks
-      - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
+      # Modules (Desativados para leveza)
+      - TYPEBOT_ENABLED=false
+      - CHATWOOT_ENABLED=false
       - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+
     depends_on:
       evolution-db:
         condition: service_healthy
     volumes:
-      - evolution_v2_instances_clean_v11:/evolution/instances
+      - evolution_v2_instances_clean_v12:/evolution/instances
 
 volumes:
   evolution_pg_data:
-  evolution_v2_instances_clean_v11:
+  evolution_v2_instances_clean_v12:

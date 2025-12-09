@@ -1,25 +1,18 @@
 import { SalesSummary, ChatMessage } from "../types";
 
-// Função para pegar URL da API Automaticamente
+// Função para pegar URL da API Automaticamente (Via Proxy Nginx)
 const getApiUrl = () => {
-  // Estratégia Inteligente: Pega o mesmo IP/Domínio que está no navegador
-  // e apenas troca a porta para 8085 (Padrão do Docker Backend)
-  const hostname = window.location.hostname;
-  const protocol = window.location.protocol;
-  
-  // Porta fixa 8085 definida no docker-compose
-  return `${protocol}//${hostname}:8085/api/v1/chat`;
+  // Retorna a rota relativa, o browser usa a mesma origem e o Nginx faz o roteamento
+  return `${window.location.origin}/api/v1/chat`;
 };
 
 export const checkBackendHealth = async () => {
-    const chatUrl = getApiUrl();
-    const healthUrl = chatUrl.replace('/chat', '/health');
+    const healthUrl = `${window.location.origin}/api/v1/health`;
     
     try {
         const res = await fetch(healthUrl);
         if (!res.ok) throw new Error("Offline");
         return await res.json(); 
-        // Retorna { status: 'online', sql: 'connected'|'error', ai: 'ok'|'missing' }
     } catch (e) {
         return { status: 'offline', sql: 'disconnected', ai: 'unknown' };
     }
@@ -43,9 +36,8 @@ export const sendMessageToAgent = async (
 ): Promise<{ text: string; data?: SalesSummary }> => {
   
   const API_URL = getApiUrl();
-  console.log("Enviando mensagem para API Docker (Auto-Detected):", API_URL);
+  console.log("Enviando mensagem para API (Proxy Nginx):", API_URL);
 
-  // Formata o histórico corretamente antes de enviar
   const formattedHistory = formatHistoryForGemini(history);
 
   try {
@@ -74,7 +66,7 @@ export const sendMessageToAgent = async (
   } catch (error: any) {
     console.error("Erro ao comunicar com Backend:", error);
     return { 
-      text: `🔴 **ERRO DE CONEXÃO**: ${error.message}. \n\nDICA: O sistema tentou conectar em ${API_URL}. Verifique se o container 'salesbot-api' está rodando.` 
+      text: `🔴 **ERRO DE CONEXÃO**: Não foi possível contatar o servidor. \n\nDetalhe: ${error.message}` 
     };
   }
 };

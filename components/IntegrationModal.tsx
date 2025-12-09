@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useRef } from 'react';
 
 interface IntegrationModalProps {
@@ -8,8 +6,9 @@ interface IntegrationModalProps {
 }
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
-  // WhatsApp Gateway States
-  const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
+  // Configuração Automática via Proxy (Mesma origem, rota /evolution)
+  // Isso evita problemas de CORS e Portas fechadas
+  const [gatewayUrl, setGatewayUrl] = useState(`${window.location.origin}/evolution`);
   const [sessionName, setSessionName] = useState('salesbot_v2'); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
@@ -23,6 +22,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   useEffect(() => {
     if (!isOpen) stopPolling();
+    // Reseta URL para o padrão seguro sempre que abre, caso tenha mudado
+    if (isOpen) {
+        setGatewayUrl(`${window.location.origin}/evolution`);
+    }
     return () => stopPolling();
   }, [isOpen]);
 
@@ -46,15 +49,15 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const fetchSessionStatus = async () => {
       try {
-          // Endpoint V2 compatible
-          const response = await fetch(`${gatewayUrl}/instance/connect/${sessionName}`, {
+          // Remove barra final se houver para evitar //
+          const cleanUrl = gatewayUrl.replace(/\/$/, '');
+          const response = await fetch(`${cleanUrl}/instance/connect/${sessionName}`, {
             method: 'GET',
             headers: { 'apikey': secretKey }
           });
 
           if (response.ok) {
               const data = await response.json();
-              // V2 structure: { instance: { state: 'open'|'connecting'|'close' }, base64: '...' }
               
               const rawStatus = data.instance?.state || data.instance?.status || 'UNKNOWN';
               const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
@@ -69,15 +72,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return;
               }
               
-              // Se tiver base64, mostramos, independente do status ser connecting ou close
               if (data.base64) {
                   setQrCodeData(data.base64);
                   setIsConnected(false);
               }
           } else {
               if (response.status === 404) {
-                  setApiStatus('NOT FOUND');
-                  // Não paramos o polling se for 404 logo após criar, pois pode estar subindo
+                  setApiStatus('WAITING...');
               } else {
                   setApiStatus(`HTTP ${response.status}`);
               }
@@ -94,21 +95,22 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
+    const cleanUrl = gatewayUrl.replace(/\/$/, '');
+    
     try {
-      // 1. FORCE DELETE (Limpeza Preventiva)
       setApiStatus('CLEANING...');
-      console.log("Tentando deletar instância antiga...");
-      await fetch(`${gatewayUrl}/instance/delete/${sessionName}`, {
+      
+      // 1. DELETE (Tentativa de Limpeza)
+      await fetch(`${cleanUrl}/instance/delete/${sessionName}`, {
         method: 'DELETE',
         headers: { 'apikey': secretKey }
-      }).catch(e => console.log("Delete error (ignored):", e));
+      }).catch(() => {}); // Ignora erro se não existir
 
-      // Delay para garantir que o banco liberou o nome
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1500));
 
-      // 2. CREATE NEW INSTANCE
+      // 2. CREATE
       setApiStatus('CREATING...');
-      const createResponse = await fetch(`${gatewayUrl}/instance/create`, {
+      const createResponse = await fetch(`${cleanUrl}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
         body: JSON.stringify({ 
@@ -120,25 +122,27 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       if (!createResponse.ok) {
          const errText = await createResponse.text().catch(() => '');
-         // Se ainda der erro de duplicidade, tentamos conectar direto
-         if (createResponse.status === 403 || createResponse.status === 409) {
-             console.log("Instância ainda existe, tentando conectar...");
-         } else {
-             throw new Error(`Erro ao criar (${createResponse.status}): ${errText}`);
+         // 403/409 significa que já existe, então vamos direto conectar
+         if (createResponse.status !== 403 && createResponse.status !== 409) {
+             throw new Error(`Erro ${createResponse.status}: ${errText}`);
          }
+      } else {
+          // Se criou com sucesso, verifique se já veio o QR Code no corpo (V2 feature)
+          const createData = await createResponse.json().catch(() => ({}));
+          if (createData.qrcode?.base64) {
+              setQrCodeData(createData.qrcode.base64);
+          }
       }
 
       setApiStatus('WAITING QR...');
-      setTimeout(() => startPolling(), 1000);
+      startPolling();
 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(`Falha: ${err.message}. Verifique o container whatsapp-gateway.`);
-      setIsLoading(false);
+      setErrorMsg(`Falha ao conectar: ${err.message}. Verifique se o backend está rodando.`);
       setApiStatus('ERROR');
     } finally {
-        // Mantemos loading visual por mais um tempo
-        setTimeout(() => setIsLoading(false), 1000);
+        setIsLoading(false);
     }
   };
 
@@ -159,36 +163,37 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
         <div className="p-6 overflow-y-auto space-y-4">
             
-            <div className="bg-indigo-50 border border-indigo-200 p-3 rounded text-xs text-indigo-700 flex justify-between items-center">
+            <div className="bg-blue-50 border border-blue-100 p-3 rounded text-xs text-blue-800 flex justify-between items-center">
                 <span>
-                    <i className="fas fa-rocket mr-1"></i>
-                    Engine: <strong>Evolution API v2.1.1 (Stable)</strong>
+                    <i className="fas fa-shield-alt mr-1"></i>
+                    Modo Proxy Seguro Ativado
                 </span>
             </div>
 
             <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL do Gateway (Auto)</label>
                  <input 
                     type="text" 
                     value={gatewayUrl}
                     onChange={(e) => setGatewayUrl(e.target.value)}
-                    className="w-full border rounded p-2 text-sm mb-2" 
+                    className="w-full border rounded p-2 text-sm mb-2 bg-gray-50 text-gray-600" 
+                    disabled
                 />
 
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão V2</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Sessão</label>
                 <div className="flex gap-2">
                     <input 
                         type="text" 
                         value={sessionName}
                         onChange={handleSessionNameChange}
-                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50" 
+                        className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-white" 
                     />
                 </div>
             </div>
             
             {errorMsg && (
-                <div className={`p-3 text-xs rounded border ${errorMsg.includes('✅') ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                   {errorMsg}
+                <div className="p-3 text-xs rounded border bg-red-50 text-red-600 border-red-200 break-words">
+                   <i className="fas fa-exclamation-circle mr-1"></i> {errorMsg}
                 </div>
             )}
 
@@ -197,8 +202,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-3">
                         <i className="fas fa-check text-2xl text-green-600"></i>
                     </div>
-                    <h3 className="text-green-800 font-bold text-lg">V2 Conectado!</h3>
-                    <p className="text-green-600 text-sm text-center">Engine atualizada e pronta para uso.</p>
+                    <h3 className="text-green-800 font-bold text-lg">Conectado!</h3>
+                    <p className="text-green-600 text-sm text-center">SalesBot está online e pronto.</p>
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded border-2 border-dashed min-h-[200px]">
@@ -207,25 +212,28 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                                 <button 
                                     onClick={generateQrCode}
                                     disabled={isLoading}
-                                    className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2 disabled:opacity-50"
+                                    className="px-6 py-2 bg-whatsapp-dark text-white rounded-full hover:bg-whatsapp-teal transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                                 >
                                     {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-qrcode"></i>}
-                                    {isLoading ? 'Reiniciando Sessão...' : 'Gerar Novo QR Code'}
+                                    {isLoading ? 'Iniciando...' : 'Gerar Novo QR Code'}
                                 </button>
                                 <p className="text-xs text-gray-400 max-w-xs text-center">
-                                    Isso irá resetar qualquer sessão travada e gerar um novo código.
+                                    Reseta a conexão e gera novo código de pareamento.
                                 </p>
                         </div>
                     ) : (
                         <div className="text-center animate-fade-in flex flex-col items-center">
-                            <div className="relative group">
-                                <img src={qrCodeData} alt="QR Code" className="w-56 h-56 border shadow-sm bg-white p-2" />
+                            <div className="relative group bg-white p-2 border rounded shadow-sm">
+                                <img src={qrCodeData} alt="QR Code" className="w-56 h-56" />
+                                <div className={`absolute inset-0 flex items-center justify-center bg-white/80 transition-opacity ${isLoading ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                                    <i className="fas fa-sync fa-spin text-2xl text-gray-600"></i>
+                                </div>
                             </div>
                             <div className="mt-3 flex flex-col items-center gap-1">
-                                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-600">
+                                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">
                                     STATUS: {apiStatus}
                                 </span>
-                                <p className="text-xs text-gray-500">Escaneie com seu WhatsApp</p>
+                                <p className="text-xs text-gray-500">Abra o WhatsApp &gt; Aparelhos Conectados &gt; Conectar</p>
                             </div>
                         </div>
                     )}

@@ -64,10 +64,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           } else if (response.status === 502 || response.status === 503) {
               setApiStatus('STARTING DB...');
           } else if (response.ok) {
-              setApiStatus('ONLINE');
-              // Se por acaso a sessão aleatória já existir (raro)
-              const data = await response.json();
-              if (data.instance?.status === 'open') setIsConnected(true);
+              const contentType = response.headers.get("content-type");
+              if (contentType && contentType.indexOf("application/json") !== -1) {
+                  const data = await response.json();
+                  if (data.instance?.status === 'open') setIsConnected(true);
+                  setApiStatus('ONLINE');
+              } else {
+                  setApiStatus('ONLINE (HTML)');
+              }
           } else {
               setApiStatus(`HTTP ${response.status}`);
           }
@@ -85,26 +89,33 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           });
 
           if (response.ok) {
-              const data = await response.json();
-              
-              const rawStatus = data.instance?.state || data.instance?.status || 'UNKNOWN';
-              const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'unknown';
-              
-              setApiStatus(currentStatus.toUpperCase());
+              const contentType = response.headers.get("content-type");
+              if (contentType && contentType.indexOf("application/json") !== -1) {
+                  const data = await response.json();
+                  
+                  // Tenta extrair status de vários locais possíveis
+                  const rawStatus = data.instance?.state || data.instance?.status || 'connecting';
+                  const currentStatus = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'connecting';
+                  
+                  setApiStatus(currentStatus.toUpperCase());
 
-              if (currentStatus === 'open') {
-                  setQrCodeData(null);
-                  setIsConnected(true);
-                  setErrorMsg(null);
-                  stopPolling();
-                  return;
-              }
-              
-              // Se tiver base64, mostramos o QR
-              if (data.base64) {
-                  setQrCodeData(data.base64);
-                  setIsConnected(false);
-                  setIsLoading(false); // Garante que o loading pare se o QR chegar
+                  if (currentStatus === 'open') {
+                      setQrCodeData(null);
+                      setIsConnected(true);
+                      setErrorMsg(null);
+                      stopPolling();
+                      return;
+                  }
+                  
+                  // Se tiver base64, mostramos o QR
+                  if (data.base64) {
+                      setQrCodeData(data.base64);
+                      setIsConnected(false);
+                      setIsLoading(false); // Garante que o loading pare se o QR chegar
+                  }
+              } else {
+                  // Resposta não é JSON (provavelmente HTML de erro 500 do Nginx mascarado como 200 ou similar)
+                  setApiStatus('API STARTING...');
               }
           } else {
               if (response.status === 404) {
@@ -191,7 +202,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             <div className="bg-blue-50 border border-blue-100 p-3 rounded text-xs text-blue-800 flex justify-between items-center">
                 <span>
                     <i className="fas fa-bolt mr-1"></i>
-                    Modo Turbo: Sessão Aleatória
+                    Modo Turbo: Sessão Aleatória (4GB Mem)
                 </span>
             </div>
 

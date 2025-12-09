@@ -44,6 +44,8 @@ services:
     image: postgres:15-alpine
     container_name: evolution-db
     restart: always
+    ports:
+      - "5432:5432"
     environment:
       - POSTGRES_DB=evolution
       - POSTGRES_USER=evolution
@@ -69,8 +71,8 @@ services:
       - SERVER_PORT=8080
       - SERVER_URL=http://whatsapp-gateway:8080
       
-      # Prevenção de Crash (SIGSEGV)
-      - NODE_OPTIONS=--max-old-space-size=2048
+      # Prevenção de Crash (SIGSEGV) - Aumentado para 4GB
+      - NODE_OPTIONS=--max-old-space-size=4096
       
       # Identidade Segura (Linux/Ubuntu é mais estável em containers)
       - CONFIG_SESSION_PHONE_CLIENT=Evolution API

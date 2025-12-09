@@ -34,7 +34,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     return () => stopPolling();
   }, [isOpen]);
 
-  const addLog = (msg: string) => setStatusLog(prev => [...prev.slice(-4), msg]);
+  const addLog = (msg: string) => setStatusLog(prev => [...prev.slice(-5), msg]);
 
   const stopPolling = () => {
       if (pollingRef.current) {
@@ -73,8 +73,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
         // Se der erro 403/400 informando que já existe, tentamos conectar direto
         if (!response.ok && response.status !== 403) {
-             // Tenta ler o erro, mas não falha hard, tenta conectar mesmo assim
-             addLog('Aviso: Instância talvez já exista. Tentando conectar...');
+             addLog(`Aviso criação: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json().catch(() => ({}));
@@ -86,7 +85,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             setQrCodeData(base64);
             addLog('QR Code Recebido! Escaneie agora.');
         } else {
-            addLog('Instância criada. Buscando QR Code...');
+            addLog('Instância solicitada. Aguardando API...');
         }
 
         // INDEPENDENTE do resultado da criação, iniciamos o monitoramento/polling
@@ -95,7 +94,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO INICIAL: ${error.message}`);
+        addLog(`ERRO REDE: ${error.message}`);
         // Mesmo com erro, tenta monitorar, vai que a instância subiu
         startMonitoring(newSession);
     } finally {
@@ -117,8 +116,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
               if (res.ok) {
                   const data = await res.json();
-                  const state = data.instance?.state || data.instance?.status;
-                  const qr = data.base64 || data.qrcode?.base64 || data.code; // Variações possíveis da V2
+                  const state = data.instance?.state || data.instance?.status || 'desconhecido';
+                  const qr = data.base64 || data.qrcode?.base64 || data.code; 
 
                   if (state === 'open') {
                       setIsConnected(true);
@@ -128,18 +127,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                       return;
                   }
 
-                  if (state === 'close') {
-                      addLog(`Tentativa ${attempts}: Iniciando...`);
-                  }
-
-                  // Se a API devolveu um QR Code novo neste polling, atualiza a tela
                   if (qr && qr.length > 100) {
                       setQrCodeData(qr);
-                      if (attempts % 5 === 0) addLog('QR Code disponível. Aguardando leitura...');
+                      if (attempts % 4 === 0) addLog(`QR Code pronto. (Status: ${state})`);
+                  } else {
+                      if (attempts % 4 === 0) addLog(`Aguardando QR... (Status: ${state})`);
                   }
+              } else {
+                  if (attempts % 3 === 0) addLog(`Erro API: ${res.status} (Tentando...)`);
               }
-          } catch (e) {
-              // Silencia erros de rede durante polling
+          } catch (e: any) {
+              if (attempts % 3 === 0) addLog(`Erro Poll: ${e.message}`);
           }
       }, 2000); // Checa a cada 2 segundos
   };
@@ -162,7 +160,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         <div className="p-6 flex flex-col items-center min-h-[350px]">
             
             {/* Status Log */}
-            <div className="w-full bg-gray-900 p-3 rounded mb-4 text-[11px] font-mono text-green-400 border border-gray-700 h-24 overflow-y-auto shadow-inner">
+            <div className="w-full bg-gray-900 p-3 rounded mb-4 text-[11px] font-mono text-green-400 border border-gray-700 h-28 overflow-y-auto shadow-inner">
                 {statusLog.map((log, i) => (
                     <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0">
                         <span className="text-gray-500 mr-2">{new Date().toLocaleTimeString().split(' ')[0]}</span>

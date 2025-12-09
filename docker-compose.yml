@@ -67,7 +67,7 @@ services:
     environment:
       # Server Basics
       - SERVER_PORT=8080
-      # SERVER_URL removido para autodetecção ou use http://localhost:8080 se necessário
+      - SERVER_URL=http://localhost:8080
       
       # Database
       - DATABASE_PROVIDER=postgresql
@@ -84,6 +84,7 @@ services:
       # Performance & Logs
       - LOG_LEVEL=warn
       - DEL_INSTANCE=false
+      - NODE_OPTIONS=--max-old-space-size=4096
       
       # Modules (Desativados para leveza)
       - TYPEBOT_ENABLED=false

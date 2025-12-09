@@ -170,26 +170,20 @@ const SQL_QUERIES = {
         LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S'
         WHERE V.TPOEPG IN ('V', 'S', 'M')
     `,
-    // Query Complexa de Rota + Cobertura
     VISITS_QUERY: `
         DECLARE @DataBase DATE = @targetDate;
         DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1);
         DECLARE @DataFimMes DATE = EOMONTH(@DataBase);
-        
-        -- Datas para checagem de Cobertura (Mês Atual da Visita)
         DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1);
         DECLARE @FimMesAtual DATE = EOMONTH(@DataBase);
 
         ;WITH DatasMes AS (
             SELECT @DataInicioMes AS DataVisita
             UNION ALL
-            SELECT DATEADD(DAY, 1, DataVisita)
-            FROM DatasMes
-            WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes
+            SELECT DATEADD(DAY, 1, DataVisita) FROM DatasMes WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes
         ),
         DiasComInfo AS (
-            SELECT 
-                d.DataVisita,
+            SELECT d.DataVisita,
                 CASE 
                     WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7'
                     WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1'
@@ -206,49 +200,35 @@ const SQL_QUERIES = {
             FROM flexx10071188.dbo.ibetpdd P
             INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD
             WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual
-            AND P.INDSTUMVTPDD = 1 -- Venda
-            AND P.CODMTCEPG = @sellerId
+            AND P.INDSTUMVTPDD = 1 AND P.CODMTCEPG = @sellerId
             GROUP BY P.CODCET
         )
         SELECT DISTINCT
-            e.CODMTCEPGVDD AS 'cod_vend',
-            epg.NOMEPG AS 'nome_vendedor',
-            a.CODCET AS 'cod_cliente', 
-            d.NOMRAZSCLCET AS 'razao_social', 
-            -- Se for escopo mensal, a data exata importa menos, queremos a lista única
-            MAX(x.DataVisita) AS 'data_visita_ref', 
-            a.DESCCOVSTCET AS 'periodicidade',
+            e.CODMTCEPGVDD AS 'cod_vend', epg.NOMEPG AS 'nome_vendedor',
+            a.CODCET AS 'cod_cliente', d.NOMRAZSCLCET AS 'razao_social', 
+            MAX(x.DataVisita) AS 'data_visita_ref', a.DESCCOVSTCET AS 'periodicidade',
             CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura',
             ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes'
         FROM flexx10071188.dbo.IBETVSTCET a
         INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana
-        INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f 
-            ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita
-            AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%'
-        INNER JOIN flexx10071188.dbo.IBETCET d 
-            ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP
-        INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e 
-            ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC
-        INNER JOIN flexx10071188.dbo.IBETCPLEPG epg 
-            ON epg.CODMTCEPG = e.CODMTCEPGVDD
+        INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%'
+        INNER JOIN flexx10071188.dbo.IBETCET d ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP
+        INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC
+        INNER JOIN flexx10071188.dbo.IBETCPLEPG epg ON epg.CODMTCEPG = e.CODMTCEPGVDD
         LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET
-        WHERE d.TPOSTUCET = 'A' 
-          AND e.CODMTCEPGVDD = @sellerId
-          -- FILTRO DINÂMICO APLICADO NO CÓDIGO JS (Dia vs Mês)
-          -- AND x.DataVisita = @targetDate 
+        WHERE d.TPOSTUCET = 'A' AND e.CODMTCEPGVDD = @sellerId
         GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido
         ORDER BY status_cobertura, a.CODCET
         OPTION (MAXRECURSION 1000);
     `,
-    // Query de Oportunidade
     OPPORTUNITY_QUERY: `
         WITH Historico AS (
              SELECT DISTINCT I.CODCATITE
              FROM flexx10071188.dbo.ibetpdd C
              INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD
              WHERE C.CODCET = @customerId
-             AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) -- AJUSTADO PARA 3 MESES
-             AND C.INDSTUMVTPDD = 1 -- Apenas Vendas
+             AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) 
+             AND C.INDSTUMVTPDD = 1
         ),
         CompradoMesAtual AS (
              SELECT DISTINCT I.CODCATITE
@@ -267,7 +247,7 @@ const SQL_QUERIES = {
         LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE
         INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE
         INNER JOIN flexx10071188.dbo.IBETGPOITE G ON P.CODGPOITE = G.CODGPOITE
-        WHERE CM.CODCATITE IS NULL -- O que ele NÃO comprou este mês
+        WHERE CM.CODCATITE IS NULL
     `
 };
 
@@ -297,7 +277,6 @@ async function executeToolCall(name, args) {
         pool = await sql.connect(sqlConfig);
         const request = pool.request();
 
-        // TOOL 1: EQUIPE
         if (name === 'get_sales_team') {
             let query = SQL_QUERIES.SALES_TEAM_BASE;
             if (args.id) {
@@ -311,91 +290,59 @@ async function executeToolCall(name, args) {
             return result.recordset.length === 0 ? { message: "Não encontrado." } : result.recordset.slice(0, 10);
         }
 
-        // TOOL 2: CLIENTES
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
             const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
             return result.recordset;
         }
 
-        // TOOL 4: ROTA DE VISITAS (COM COBERTURA E ESCOPO MENSAL)
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
-            const scope = args.scope || 'day'; // 'day' or 'month'
-
+            const scope = args.scope || 'day'; 
             request.input('targetDate', sql.Date, date);
             request.input('sellerId', sql.Int, args.sellerId);
             
-            // Lógica de Filtro Dinâmico SQL
             let finalQuery = SQL_QUERIES.VISITS_QUERY;
-            
-            // Se o escopo for 'day', filtramos pela data exata
             if (scope === 'day') {
-                // A query base já tem WHERE ..., precisamos adicionar o AND x.DataVisita
-                // Vamos usar replace para injetar o filtro, já que a query é fixa
-                finalQuery = finalQuery.replace(
-                    "-- AND x.DataVisita = @targetDate", 
-                    "AND x.DataVisita = @targetDate"
-                );
-            } else {
-                // Se for 'month', NÃO filtramos por dia específico, trazendo a base toda do período
-                // A query já está preparada para trazer o mês todo nas CTEs, só o filtro final que removemos
+                finalQuery = finalQuery.replace("-- AND x.DataVisita = @targetDate", "AND x.DataVisita = @targetDate");
             }
 
             const result = await request.query(finalQuery);
-            
-            // Cálculos para a IA
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
             
-            // CRITICAL: Lista para o Chat do WhatsApp
-            // Aumentamos o limite para 50 para trazer mais clientes na lista de "faltam cobrir"
             const listaSimples = result.recordset
-                .filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true) // Se for mensal, foca nos pendentes
+                .filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true)
                 .slice(0, 50)
                 .map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
 
-            if (result.recordset.length > 50) {
-                listaSimples.push(`... e mais ${result.recordset.length - 50} clientes.`);
-            }
-
-            const summary = {
-                escopo_analise: scope === 'day' ? `Rota do Dia ${date}` : `Base Prevista Mês Inteiro`,
-                total_clientes_base: total,
-                ja_compraram_mes: positivados,
-                pendentes_cobertura: pendentes,
-                // Injetamos a lista aqui para a IA ler
-                LISTA_CLIENTES: listaSimples,
-                status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.`
-            };
+            if (result.recordset.length > 50) listaSimples.push(`... e mais ${result.recordset.length - 50} clientes.`);
 
             return {
-                ai_response: summary, 
-                frontend_data: result.recordset, // Frontend sempre recebe tudo para tabela
+                ai_response: {
+                    escopo_analise: scope === 'day' ? `Rota do Dia ${date}` : `Base Prevista Mês Inteiro`,
+                    total_clientes_base: total,
+                    ja_compraram_mes: positivados,
+                    pendentes_cobertura: pendentes,
+                    LISTA_CLIENTES: listaSimples,
+                    status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.`
+                }, 
+                frontend_data: result.recordset,
                 debug_meta: { period: scope === 'day' ? date : 'Mês Atual', filters: [`Vendedor ${args.sellerId}`], sqlLogic: scope === 'month' ? 'Base Mensal' : 'Rota Diária' }
             };
         }
 
-        // TOOL 5: OPORTUNIDADES
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            
-            const listaProdutos = result.recordset.map(p => p.descricao);
-
             return {
-                ai_response: { 
-                    oportunidades_encontradas: result.recordset.length, 
-                    // Lista simples para o Chat
-                    lista_produtos_sugeridos: listaProdutos 
-                },
+                ai_response: { oportunidades_encontradas: result.recordset.length, lista_produtos_sugeridos: result.recordset.map(p => p.descricao) },
                 frontend_data: result.recordset,
                 debug_meta: { period: 'Últimos 3 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' }
             };
         }
 
-        // TOOL 3: VENDAS (OTIMIZADO + COBERTURA)
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
@@ -427,7 +374,6 @@ async function executeToolCall(name, args) {
             if (args.sellerId) { whereConditions.push("ibetpdd.CODMTCEPG = @sellerId"); debugFilters.push(`Vendedor: ${args.sellerId}`); }
             if (args.customerId) { whereConditions.push("ibetpdd.CODCET = @customerId"); debugFilters.push(`Cliente: ${args.customerId}`); }
 
-            // Dynamic Joins
             let dynamicJoins = "";
             let usesLine = false;
 
@@ -443,21 +389,11 @@ async function executeToolCall(name, args) {
                 dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD ";
             }
             if (args.groupBy === 'supervisor') {
-                dynamicJoins += `
-                    INNER JOIN flexx10071188.dbo.ibetcplepg VENDEDOR ON ibetpdd.CODMTCEPG = VENDEDOR.CODMTCEPG
-                    INNER JOIN flexx10071188.dbo.IBETSBN SBN ON VENDEDOR.CODMTCEPG = SBN.codmtcepgsbn
-                    INNER JOIN flexx10071188.dbo.ibetcplepg SUP ON SBN.CODMTCEPGRPS = SUP.CODMTCEPG AND SUP.TPOEPG = 'S'
-                `;
+                dynamicJoins += ` INNER JOIN flexx10071188.dbo.ibetcplepg VENDEDOR ON ibetpdd.CODMTCEPG = VENDEDOR.CODMTCEPG INNER JOIN flexx10071188.dbo.IBETSBN SBN ON VENDEDOR.CODMTCEPG = SBN.codmtcepgsbn INNER JOIN flexx10071188.dbo.ibetcplepg SUP ON SBN.CODMTCEPGRPS = SUP.CODMTCEPG AND SUP.TPOEPG = 'S' `;
             }
 
             if (args.line) {
-                whereConditions.push(`
-                    (CASE 
-                        WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
-                        WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
-                        ELSE IBETDOMLINNTE.DESLINNTE 
-                    END) LIKE @line
-                `);
+                whereConditions.push(` (CASE WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD' WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA' ELSE IBETDOMLINNTE.DESLINNTE END) LIKE @line `);
                 debugFilters.push(`Linha: ${args.line}`);
             }
 
@@ -523,11 +459,7 @@ async function executeToolCall(name, args) {
                 let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; 
                 if (args.groupBy === 'seller') dimension = "CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg)";
                 if (args.groupBy === 'supervisor') dimension = "CONCAT(SBN.CODMTCEPGRPS, ' - ', SUP.nomepg)";
-                if (args.groupBy === 'line') dimension = `(CASE 
-                        WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD'
-                        WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA'
-                        ELSE IBETDOMLINNTE.DESLINNTE 
-                    END)`;
+                if (args.groupBy === 'line') dimension = `(CASE WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD' WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA' ELSE IBETDOMLINNTE.DESLINNTE END)`;
                 if (args.groupBy === 'customer') dimension = "CONCAT(IBETCET.CODCET, ' - ', IBETCET.NOMRAZSCLCET)";
                 if (args.groupBy === 'product') dimension = "CONCAT(IBETCATITE.CODCATITE, ' - ', IBETCATITE.DESCATITE)";
                 if (args.groupBy === 'product_group') dimension = "CONCAT(IBETGPOITE.CODGPOITE, ' - ', IBETGPOITE.DESGPOITE)";
@@ -552,13 +484,8 @@ async function executeToolCall(name, args) {
                 
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-                
-                // CRITICAL: Se for top list (clientes, produtos), envia lista simples pra IA também
-                // Aumentado slice para 50 para satisfazer pedido de listas maiores
                 if (aggResult.recordset.length > 0) {
-                     aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => 
-                        `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`
-                     );
+                     aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`);
                 }
 
             } else {
@@ -574,18 +501,12 @@ async function executeToolCall(name, args) {
                 `;
                 if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
                 detailQuery += ` GROUP BY ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetcplepg.nomepg, ibetpdd.CODMTCEPG ORDER BY ibetpdd.DATEMSDOCPDD DESC`;
-                
                 const detailResult = await request.query(detailQuery);
                 frontendPayload = detailResult.recordset;
             }
 
-            return {
-                ai_response: aiPayload,
-                frontend_data: frontendPayload,
-                debug_meta: debugMeta 
-            };
+            return { ai_response: aiPayload, frontend_data: frontendPayload, debug_meta: debugMeta };
         }
-
     } catch (sqlErr) {
         console.error("SQL Error:", sqlErr);
         return { error: `Erro SQL: ${sqlErr.message}` };
@@ -613,43 +534,25 @@ async function runChatAgent(userMessage, history = []) {
         const parts = result.candidates?.[0]?.content?.parts || [];
         const functionCalls = parts.filter(p => p.functionCall);
         const textPart = parts.find(p => p.text);
-        
         if (textPart) finalResponse += textPart.text;
         if (functionCalls.length === 0) break;
 
         const functionResponses = [];
         for (const call of functionCalls) {
             const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
-            
             if (toolResult && toolResult.frontend_data) {
-                // Preserva metadados de Cobertura/Visitas para o Frontend
-                const rows = toolResult.frontend_data;
-                const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
-                
                 dataForFrontend = { 
-                    samples: rows,
+                    samples: toolResult.frontend_data,
                     debugMeta: toolResult.debug_meta,
                     totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos
                 };
-                
-                functionResponses.push({
-                    functionResponse: {
-                        name: call.functionCall.name,
-                        response: { result: toolResult.ai_response } 
-                    }
-                });
+                functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult.ai_response } } });
             } else {
-                functionResponses.push({
-                    functionResponse: {
-                        name: call.functionCall.name,
-                        response: { result: toolResult }
-                    }
-                });
+                functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult } } });
             }
         }
         result = await chat.sendMessage({ message: functionResponses });
     }
-
     return { text: finalResponse, data: dataForFrontend };
 }
 
@@ -674,16 +577,13 @@ app.post('/api/v1/chat', async (req, res) => {
         let formattedData = null;
         if (response.data && response.data.samples) {
             const rows = response.data.samples;
-            
-            // Lógica para diferenciar tipos de dados (Vendas vs Visitas vs Oportunidades)
-            // Se tiver 'data_visita' ou 'data_visita_ref', é visita.
             const isVisit = rows[0]?.['data_visita_ref'] !== undefined || rows[0]?.['data_visita'] !== undefined;
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
 
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
-                totalCoverage: response.data.totalCoverage, // Envia cobertura para o Dashboard
+                totalCoverage: response.data.totalCoverage,
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],
@@ -702,20 +602,26 @@ app.post('/api/v1/chat', async (req, res) => {
     }
 });
 
+// WEBHOOK UPDATE FOR EVOLUTION V2
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const data = req.body;
-    const msg = data.data?.message?.conversation || data.data?.message?.extendedTextMessage?.text;
-    const sender = data.data?.key?.remoteJid;
-    const instance = data.instance || 'bot_v1'; // Default updated
+    let msg, sender;
 
-    // Log detalhado para debug da conexão
-    console.log("--- WEBHOOK RECEIVED ---");
-    console.log("Event Type:", data.event);
-    console.log("Instance:", instance);
-    if (data.event === 'connection.update') {
-        console.log("Connection Update - State:", data.data?.state);
-        console.log("Connection Update - StatusReason:", data.data?.statusReason);
-    }
+    // Lógica para detecção segura do formato v2 ou v1
+    try {
+        if (data.data?.message) {
+            // Estrutura V2 Padrão
+            msg = data.data.message.conversation || data.data.message.extendedTextMessage?.text;
+            sender = data.data.key.remoteJid;
+        } else if (data.data?.key) {
+            // Estrutura alternativa
+            sender = data.data.key.remoteJid;
+        }
+    } catch(e) { console.log("Webhook parse fail", e); }
+
+    const instance = data.instance || 'salesbot_v2';
+
+    console.log(`[Webhook] Instance: ${instance} | Sender: ${sender} | Msg: ${msg ? msg.substring(0, 15) : 'MEDIA/SYSTEM'}`);
 
     if (msg && sender && !sender.includes('@g.us')) {
         runChatAgent(msg).then(resp => {
@@ -725,22 +631,32 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     res.json({ status: 'ok' });
 });
 
+// SEND MESSAGE UPDATE FOR EVOLUTION V2
 async function sendWhatsappMessage(to, text, session) {
-    const gatewayUrl = 'http://whatsapp-gateway:8080'; 
+    const gatewayUrl = process.env.GATEWAY_URL || 'http://whatsapp-gateway:8080'; 
     const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
     const number = to.replace('@s.whatsapp.net', '');
+    
     try {
-        const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
+        // Endpoint V2: /message/send/text/{instance}
+        // Body V2: { number, text, options: { delay } }
+        const response = await fetch(`${gatewayUrl}/message/send/text/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
-            body: JSON.stringify({ number, options: { delay: 1200 }, textMessage: { text } })
+            body: JSON.stringify({ 
+                number: number, 
+                text: text, 
+                delay: 1200 
+            })
         });
+        
         if (!response.ok) {
-            console.error(`WPP Send Fail: ${response.status} ${response.statusText}`);
+            const errText = await response.text();
+            console.error(`WPP Send Fail (${response.status}): ${errText}`);
         } else {
             console.log(`WPP Sent to ${to}`);
         }
     } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V-Routes-Opp running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V2 Upgrade running on ${PORT}`));

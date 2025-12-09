@@ -12,11 +12,9 @@ services:
     ports:
       - "3005:80"
     environment:
-      # Atualizado para porta 8085 (externa)
       - VITE_API_URL=http://localhost:8085/api/v1/query
       - VITE_GATEWAY_URL=http://localhost:8082
       - VITE_USE_MOCK=false
-      # API_KEY Removida por segurança (backend que gerencia)
     depends_on:
       - salesbot-api
       - whatsapp-gateway
@@ -29,59 +27,51 @@ services:
     container_name: salesbot-api
     restart: always
     ports:
-      # Porta Externa 8085 mapeada para Interna 8080 para evitar conflito
       - "8085:8080"
     environment:
       - DB_HOST=consulta.flagcloud.com.br
       - DB_USER=SQL10071188
       - DB_PASS=SQL2020/R@1nh@
       - DB_NAME=flexx10071188
-      # --- GERE UMA NOVA CHAVE NO GOOGLE AI STUDIO E COLE ABAIXO ---
       - API_KEY=COLE_SUA_NOVA_CHAVE_AQUI
       - SECRET_KEY=minha-senha-secreta-api
-    # Removida dependência do sql-server local
+      # URL interna para comunicação docker-to-docker
+      - GATEWAY_URL=http://whatsapp-gateway:8080
 
-  # 3. WhatsApp Gateway (Evolution API)
+  # 3. WhatsApp Gateway (Evolution API v2.1.1)
   whatsapp-gateway:
-    image: atendai/evolution-api:v1.8.2
+    image: atendai/evolution-api:v2.1.1
     container_name: whatsapp-gateway
     restart: always
     ports:
       - "8082:8080"
     environment:
-      - AUTHENTICATION_API_KEY=minha-senha-secreta-api
+      - SERVER_TYPE=http
       - SERVER_PORT=8080
+      - AUTHENTICATION_API_KEY=minha-senha-secreta-api
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       
-      # CONFIGURAÇÃO "VANILLA" (Padrão de Fábrica)
-      # Removemos CONFIG_SESSION_PHONE_CLIENT/NAME para evitar erro 401
+      # DATABASE (SQLite Nativo - Simples e Robusto)
+      - DATABASE_PROVIDER=sqlite
+      - DATABASE_CONNECTION_URI=file:./evolution.db
       
-      # Armazenamento Local (Sem Redis/Sem Banco Local)
-      - CACHE_REDIS_ENABLED=false
-      - DATABASE_ENABLED=false
-      
-      # Configurações de Estabilidade
+      # CONFIGURAÇÕES DA INSTÂNCIA
       - DEL_INSTANCE=false
-      - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
-      - LOG_LEVEL=ERROR
+      - LOG_LEVEL=error
       - QRCODE_LIMIT=30
-      - REJECT_CALLS=false
-      - WEBSOCKET_ENABLED=true
       
-      # Webhooks
+      # CONFIGURAÇÕES DE BROWSER (CRÍTICO PARA EVITAR 401)
+      - CONFIG_SESSION_PHONE_CLIENT=SalesBot
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      
+      # Webhooks (Atualizado para v2)
       - WEBHOOK_GLOBAL_URL=http://salesbot-api:8080/api/v1/whatsapp/webhook
       - WEBHOOK_GLOBAL_ENABLED=true
-      - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
-      - WEBHOOK_EVENTS_QRCODE_UPDATED=true
-      - WEBHOOK_EVENTS_MESSAGES_SET=false
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
-      - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
-      - WEBHOOK_EVENTS_ERRORS=false
     volumes:
-      # Volumes v10_clean: Instalação Limpa Final
-      - evolution_instances_v10_clean:/evolution/instances
-      - evolution_store_v10_clean:/evolution/store
+      - evolution_v2_data:/evolution/store
+      - evolution_v2_instances:/evolution/instances
 
-# Volumes v10 garantem limpeza total
 volumes:
-  evolution_instances_v10_clean:
-  evolution_store_v10_clean:
+  evolution_v2_data:
+  evolution_v2_instances:

@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 
 interface IntegrationModalProps {
@@ -9,8 +10,8 @@ interface IntegrationModalProps {
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   // WhatsApp Gateway States
   const [gatewayUrl, setGatewayUrl] = useState(`http://${window.location.hostname}:8082`);
-  // Mudamos o padrão para 'sessao_final_v1' para garantir limpeza
-  const [sessionName, setSessionName] = useState('sessao_final_v1'); 
+  // Mudamos o padrão para 'sessao_limpa_v10' para evitar conflitos antigos
+  const [sessionName, setSessionName] = useState('sessao_limpa_v10'); 
   const [secretKey, setSecretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -303,7 +304,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         type="text" 
                         value={sessionName}
                         onChange={handleSessionNameChange}
-                        placeholder="ex: sessao_final_v1"
+                        placeholder="ex: sessao_limpa_v10"
                         className="flex-1 border rounded p-2 text-sm font-mono text-gray-700 bg-gray-50 focus:bg-white focus:border-whatsapp-teal outline-none transition" 
                     />
                     <button 

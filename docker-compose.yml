@@ -39,8 +39,7 @@ services:
       # --- GERE UMA NOVA CHAVE NO GOOGLE AI STUDIO E COLE ABAIXO ---
       - API_KEY=COLE_SUA_NOVA_CHAVE_AQUI
       - SECRET_KEY=minha-senha-secreta-api
-    depends_on:
-      - sql-server
+    # Removida dependência do sql-server local
 
   # 3. WhatsApp Gateway (Evolution API)
   whatsapp-gateway:
@@ -52,8 +51,11 @@ services:
     environment:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - SERVER_PORT=8080
-      # REMOVIDO: CONFIG_SESSION_PHONE_CLIENT e NAME para usar identidade padrão (Chrome/Baileys)
-      # Isso evita o erro 'device_removed' (401)
+      
+      # FIX: Define identidade fixa para evitar 'device_removed'
+      - CONFIG_SESSION_PHONE_CLIENT=SalesBot Client
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1015901307
       
       # Configurações otimizadas para estabilidade
       - BROWSER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu
@@ -74,20 +76,8 @@ services:
       - evolution_instances_v5:/evolution/instances
       - evolution_store_v5:/evolution/store
 
-  # 4. SQL Server (Banco de Dados Local)
-  sql-server:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: salesbot-db
-    restart: always
-    environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=YourStrongPass123!
-    ports:
-      - "1433:1433"
-    volumes:
-      - sql_data:/var/opt/mssql
+# Serviço SQL Server REMOVIDO pois o sistema conecta em consulta.flagcloud.com.br
 
 volumes:
-  sql_data:
   evolution_instances_v5:
   evolution_store_v5:

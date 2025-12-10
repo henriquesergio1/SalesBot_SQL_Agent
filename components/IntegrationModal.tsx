@@ -69,10 +69,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               const state = data.instance?.state || data.state;
               if (state === 'open') {
                   setIsConnected(true);
-                  addLog('Instância conectada.');
+                  addLog('Instância já conectada.');
               } else {
-                  setIsConnected(false);
-                  addLog(`Status salvo: ${state}.`);
+                  addLog(`Status salvo: ${state}`);
+                  if (state === 'connecting') {
+                      addLog('Monitorando conexão...');
+                      monitorSession(sessionName, 1);
+                  }
               }
           } else {
               localStorage.removeItem('salesbot_session_id');
@@ -87,10 +90,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
-    // Gera ID único para evitar cache do navegador/api
-    const newSessionId = `salesbot_v7_${Math.floor(Math.random() * 1000)}`;
+    // Novo ID limpo
+    const newSessionId = `salesbot_v8_${Math.floor(Math.random() * 10000)}`;
     
-    // Limpeza prévia
+    // Tenta limpar anterior se existir
     const oldSessionId = localStorage.getItem('salesbot_session_id');
     if (oldSessionId) {
         addLog('Limpando sessão antiga...');
@@ -101,11 +104,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     }
 
     try {
-        addLog(`1. Criando instância ${newSessionId}...`);
         localStorage.setItem('salesbot_session_id', newSessionId);
         setCurrentSessionName(newSessionId);
 
-        // PASSO 1: CRIAR (QRCODE: FALSE É CRÍTICO AQUI)
+        addLog(`1. Criando sessão ${newSessionId}...`);
+
+        // 1. CRIAR APENAS (sem QRCODE)
         const createRes = await fetch(`${EVOLUTION_URL}/instance/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
@@ -117,14 +121,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             })
         });
 
-        if (!createRes.ok) throw new Error('Falha na criação. Tente novamente.');
-
-        addLog('2. Instância criada. Aguardando motor...');
-        await new Promise(r => setTimeout(r, 2000)); // Delay obrigatório
-
-        addLog('3. Iniciando conexão (Gerando QR)...');
+        if (!createRes.ok) throw new Error('Falha ao criar instância.');
         
-        // PASSO 2: CONECTAR
+        addLog('2. Instância criada. Aguardando...');
+        await new Promise(r => setTimeout(r, 2000));
+
+        addLog('3. Solicitando conexão...');
+        // 2. SOLICITAR CONEXÃO
         const connectRes = await fetch(`${EVOLUTION_URL}/instance/connect/${newSessionId}`, {
              headers: { 'apikey': secretKey }
         });
@@ -134,16 +137,16 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             if (data.qrcode?.base64 || data.base64) {
                  renderQr(data.qrcode?.base64 || data.base64);
             } else {
-                 addLog('Solicitado. Monitorando Webhook...');
+                 addLog('Conexão iniciada. Aguardando QR...');
                  monitorSession(newSessionId, 1);
             }
         } else {
-            addLog('Erro no comando connect. Monitorando...');
+            addLog('Erro ao conectar. Tentando monitorar...');
             monitorSession(newSessionId, 1);
         }
 
     } catch (error: any) {
-        addLog(`Erro: ${error.message}`);
+        addLog(`Erro crítico: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -181,26 +184,47 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   setIsLoading(false);
                   return; 
               }
-              if (attempt % 3 === 0) addLog(`Status: ${state}...`);
+              // Não loga "connecting" toda hora para não poluir
+              if (state !== 'connecting' || attempt % 5 === 0) {
+                   addLog(`Status: ${state}`);
+              }
           }
 
       } catch (e) { /* ignore */ }
 
-      // Timeout de 60s
-      if (attempt > 30) {
-          addLog('Tempo limite. Tente reiniciar.');
+      // Polling a cada 2s
+      if (attempt < 60) {
+          timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2000);
+      } else {
+          addLog('Tempo esgotado. Tente buscar manualmente.');
           setIsLoading(false);
-          return;
       }
+  };
 
-      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2000);
+  const manualFetchQr = async () => {
+      if (!currentSessionName) return;
+      addLog('Buscando QR Code manualmente...');
+      try {
+          // Tenta conectar de novo para forçar retorno do QR
+          const connectRes = await fetch(`${EVOLUTION_URL}/instance/connect/${currentSessionName}`, {
+               headers: { 'apikey': secretKey }
+          });
+          if (connectRes.ok) {
+             const data = await connectRes.json();
+             if (data.qrcode?.base64 || data.base64) {
+                  renderQr(data.qrcode?.base64 || data.base64);
+             } else {
+                  addLog('API não retornou imagem ainda.');
+             }
+          }
+      } catch (e) { addLog('Erro ao buscar QR.'); }
   };
 
   const renderQr = (base64: string) => {
       if (!base64) return;
       if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
       setQrCodeData(base64);
-      addLog('QR Code recebido!');
+      addLog('QR Code Recebido!');
       setIsLoading(false);
   };
 
@@ -212,7 +236,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         
         <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
             <h2 className="text-white font-bold flex items-center gap-2">
-                <i className="fab fa-whatsapp text-green-400"></i> Nova Conexão v7
+                <i className="fab fa-whatsapp text-green-400"></i> Conexão WhatsApp v8
             </h2>
             <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>
@@ -239,11 +263,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 <div className="flex flex-col items-center w-full animate-fade-in">
                     <img src={qrCodeData} alt="QR Code" className="w-64 h-64 object-contain border-4 border-slate-200 rounded-lg" />
                     <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 font-semibold animate-pulse">
-                        <i className="fas fa-circle-notch fa-spin"></i> Aguardando leitura...
+                        <i className="fas fa-circle-notch fa-spin"></i> Escaneie com seu celular
                     </div>
+                    <button onClick={manualFetchQr} className="mt-4 text-xs text-gray-400 underline hover:text-blue-500">Atualizar QR Code</button>
                 </div>
             ) : (
-                <div className="flex flex-col items-center justify-center w-full flex-1">
+                <div className="flex flex-col items-center justify-center w-full flex-1 gap-3">
                     <button 
                         onClick={handleStartConnection}
                         disabled={isLoading}
@@ -251,8 +276,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                             isLoading ? 'bg-gray-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700'
                         }`}
                     >
-                        {isLoading ? 'Iniciando...' : 'Gerar QR Code'}
+                        {isLoading ? 'Aguarde...' : 'Gerar Nova Conexão'}
                     </button>
+                    
+                    {isLoading && (
+                        <button onClick={manualFetchQr} className="text-xs text-blue-600 underline">
+                            Tentar buscar QR Code manualmente
+                        </button>
+                    )}
                 </div>
             )}
         </div>

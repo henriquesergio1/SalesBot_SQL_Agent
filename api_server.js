@@ -607,8 +607,12 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const body = req.body;
     
     const instance = body.instance || 'unknown';
-    const eventType = body.event; 
+    // Ignora instâncias fantasmas que não sejam a principal
+    if (instance !== 'salesbot_main') {
+        return res.json({ status: 'ignored_zombie' });
+    }
 
+    const eventType = body.event; 
     let msg, sender, isFromMe = false;
 
     try {

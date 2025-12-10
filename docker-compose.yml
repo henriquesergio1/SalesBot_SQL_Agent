@@ -51,7 +51,7 @@ services:
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - QRCODE_LIMIT=30
-      # Otimização para evitar travamentos
+      # Otimização de Performance
       - WHERENOW_ENABLED=false
       - GROUPS_IGNORE=true
       - DATABASE_SAVE_DATA_INSTANCE=true
@@ -73,6 +73,7 @@ services:
       - WEBHOOK_EVENTS_QRCODE_UPDATED=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+      - WEBHOOK_EVENTS_ERRORS=false
     depends_on:
       - evolution-db
       - evolution-redis
@@ -87,8 +88,8 @@ services:
       - POSTGRES_PASSWORD=evolutionpass
       - POSTGRES_DB=evolution
     volumes:
-      # NOME DO VOLUME ALTERADO PARA FORÇAR RECRIAÇÃO LIMPA DO BANCO (CORRIGE ERRO P1000)
-      - evolution_data_fresh:/var/lib/postgresql/data
+      # NOME DO VOLUME ALTERADO PARA V3 PARA LIMPEZA TOTAL DE ZUMBIS
+      - evolution_data_v3_clean:/var/lib/postgresql/data
     command: ["postgres", "-c", "max_connections=200"]
 
   # 5. Redis for Evolution API
@@ -99,4 +100,4 @@ services:
     command: ["redis-server", "--appendonly", "no"]
 
 volumes:
-  evolution_data_fresh:
+  evolution_data_v3_clean:

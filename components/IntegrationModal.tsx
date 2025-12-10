@@ -29,7 +29,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     if (isOpen) {
         setSessionName(generateSessionId());
         setQrCodeData(null);
-        setStatusLog(['Sistema pronto v2.3.6.']);
+        setStatusLog(['Sistema pronto v2.2.2']);
         setIsConnected(false);
     }
     return () => {
@@ -182,7 +182,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         
         <div className="bg-[#075E54] p-4 flex justify-between items-center">
             <h2 className="text-white font-bold flex items-center gap-2">
-                <i className="fab fa-whatsapp"></i> Nova Conexão v2
+                <i className="fab fa-whatsapp"></i> Nova Conexão v2.2.2
             </h2>
             <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>
@@ -236,7 +236,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </div>
                         <h3 className="font-bold text-gray-800 text-lg">Conectar SalesBot</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2 leading-relaxed">
-                            O sistema irá configurar a API v2.3.6 e gerar o QR Code.
+                            O sistema irá configurar a API v2.2.2 e gerar o QR Code.
                         </p>
                     </div>
 

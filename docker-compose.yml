@@ -38,9 +38,9 @@ services:
     depends_on:
       - whatsapp-gateway
 
-  # 3. WhatsApp Gateway (Evolution API v2.3.6)
+  # 3. WhatsApp Gateway (Evolution API v2.2.2 Stable)
   whatsapp-gateway:
-    image: atendai/evolution-api:v2.3.6
+    image: atendai/evolution-api:v2.2.2
     container_name: whatsapp-gateway
     restart: always
     ports:

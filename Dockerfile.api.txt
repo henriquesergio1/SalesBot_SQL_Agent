@@ -1,3 +1,4 @@
+
 FROM node:20
 
 WORKDIR /app
@@ -9,8 +10,8 @@ RUN npm pkg set type="module"
 # Disable SSL strictness for stability
 RUN npm config set strict-ssl false
 
-# Install dependencies
-RUN npm install express mssql cors @google/genai --save
+# Install dependencies including Baileys for native WhatsApp
+RUN npm install express mssql cors @google/genai @whiskeysockets/baileys qrcode pino --save
 
 COPY api_server.js .
 

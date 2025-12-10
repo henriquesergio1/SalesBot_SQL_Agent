@@ -39,7 +39,7 @@ services:
     depends_on:
       - whatsapp-gateway
 
-  # 3. WhatsApp Gateway (Evolution API v2.2.2 Stable)
+  # 3. WhatsApp Gateway (Evolution API v2.2.2 Stable - Hardened Configuration)
   whatsapp-gateway:
     image: atendai/evolution-api:v2.2.2
     container_name: whatsapp-gateway
@@ -51,22 +51,27 @@ services:
       - SERVER_URL=http://whatsapp-gateway:8080
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
-      - QRCODE_LIMIT=60
+      # Aumentar timeouts para evitar loops de reinício
+      - QRCODE_LIMIT=120
       - WEBSOCKET_ENABLED=true
       - DEL_INSTANCE=true
+      # Configurações Críticas do Chrome para Docker
+      - CHROME_BIN=/usr/bin/chromium-browser
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Chrome
       # Otimização de Performance
       - WHERENOW_ENABLED=false
-      - GROUPS_IGNORE=false
+      - GROUPS_IGNORE=true
       - DATABASE_SAVE_DATA_INSTANCE=true
       - DATABASE_SAVE_DATA_NEW_MESSAGE=true
       - DATABASE_SAVE_MESSAGE_UPDATE=false
       - DATABASE_SAVE_DATA_CONTACTS=false
       - DATABASE_SAVE_DATA_CHATS=false
-      # Database (Postgres) - Required for v2
+      # Database (Postgres)
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution:evolutionpass@evolution-db:5432/evolution
-      # Cache (Redis) - Required for v2
+      # Cache (Redis)
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://evolution-redis:6379/0
       # Webhooks
@@ -77,6 +82,7 @@ services:
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
       - WEBHOOK_EVENTS_ERRORS=true
+    command: ["node", "./dist/src/main.js", "--no-sandbox", "--disable-gpu"]
     depends_on:
       - evolution-db
       - evolution-redis
@@ -91,7 +97,7 @@ services:
       - POSTGRES_PASSWORD=evolutionpass
       - POSTGRES_DB=evolution
     volumes:
-      - evolution_data_v6_clean:/var/lib/postgresql/data
+      - evolution_data_v7_final:/var/lib/postgresql/data
     command: ["postgres", "-c", "max_connections=200"]
 
   # 5. Redis for Evolution API
@@ -99,7 +105,10 @@ services:
     image: redis:alpine
     container_name: evolution-redis
     restart: always
-    command: ["redis-server", "--appendonly", "no"]
+    volumes:
+      - evolution_redis_v7_final:/data
+    command: ["redis-server", "--appendonly", "yes"]
 
 volumes:
-  evolution_data_v6_clean:
+  evolution_data_v7_final:
+  evolution_redis_v7_final:

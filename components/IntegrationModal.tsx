@@ -30,18 +30,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   useEffect(() => {
     isMountedRef.current = true;
-    
     const savedSession = localStorage.getItem('salesbot_session_id');
     
     if (isOpen) {
-        setQrCodeData(null);
-        setStatusLog([{ time: getCurrentTime(), msg: 'Painel de Conexão Aberto' }]);
-        
         if (savedSession) {
             setCurrentSessionName(savedSession);
             checkInitialStatus(savedSession);
         } else {
-            addLog('Nenhuma sessão ativa encontrada.');
+            addLog('Pronto para iniciar nova conexão.');
         }
     }
     return () => {
@@ -65,7 +61,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const checkInitialStatus = async (sessionName: string) => {
       try {
-          addLog(`Verificando status de ${sessionName}...`);
           const res = await fetch(`${EVOLUTION_URL}/instance/connectionState/${sessionName}`, {
               headers: { 'apikey': secretKey }
           });
@@ -74,125 +69,103 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               const state = data.instance?.state || data.state;
               if (state === 'open') {
                   setIsConnected(true);
-                  addLog('Instância já está conectada e operante.');
+                  addLog('Instância conectada.');
               } else {
-                  addLog(`Status atual: ${state || 'Desconhecido'}`);
-                  // Se não estiver conectado, força uma nova conexão limpa
                   setIsConnected(false);
+                  addLog(`Status salvo: ${state}.`);
               }
           } else {
-              addLog('Instância não encontrada na API.');
               localStorage.removeItem('salesbot_session_id');
               setCurrentSessionName('');
           }
-      } catch (e) {
-          addLog('Erro ao verificar status inicial.');
-      }
+      } catch (e) { /* ignore */ }
   };
 
-  const handleForceNewConnection = async () => {
+  const handleStartConnection = async () => {
     stopPolling();
     setIsLoading(true);
     setQrCodeData(null);
     setIsConnected(false);
     
-    const newSessionId = `salesbot_v4_${Math.floor(Math.random() * 10000)}`;
+    // Gera ID único para evitar cache do navegador/api
+    const newSessionId = `salesbot_v7_${Math.floor(Math.random() * 1000)}`;
+    
+    // Limpeza prévia
     const oldSessionId = localStorage.getItem('salesbot_session_id');
+    if (oldSessionId) {
+        addLog('Limpando sessão antiga...');
+        try {
+            await fetch(`${EVOLUTION_URL}/instance/logout/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
+            await fetch(`${EVOLUTION_URL}/instance/delete/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
+        } catch (e) {}
+    }
 
     try {
-        if (oldSessionId) {
-            addLog(`Limpando sessão antiga...`);
-            try {
-                await fetch(`${EVOLUTION_URL}/instance/logout/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
-                await fetch(`${EVOLUTION_URL}/instance/delete/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
-            } catch (e) { /* ignore */ }
-            localStorage.removeItem('salesbot_session_id');
-        }
-
-        addLog(`1. Criando instância: ${newSessionId}`);
-        setCurrentSessionName(newSessionId);
+        addLog(`1. Criando instância ${newSessionId}...`);
         localStorage.setItem('salesbot_session_id', newSessionId);
+        setCurrentSessionName(newSessionId);
 
-        // PASSO 1: CRIAR APENAS (QRCODE FALSE para evitar loop)
+        // PASSO 1: CRIAR (QRCODE: FALSE É CRÍTICO AQUI)
         const createRes = await fetch(`${EVOLUTION_URL}/instance/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
             body: JSON.stringify({ 
                 instanceName: newSessionId,
-                qrcode: false, // IMPORTANTE: Não pedir QR na criação
+                qrcode: false, 
                 integration: "WHATSAPP-BAILEYS",
                 rejectUnauthorized: false
             })
         });
 
-        if (!createRes.ok) {
-            throw new Error('Falha ao criar instância');
-        }
+        if (!createRes.ok) throw new Error('Falha na criação. Tente novamente.');
 
-        addLog('2. Instância criada. Iniciando conexão...');
+        addLog('2. Instância criada. Aguardando motor...');
+        await new Promise(r => setTimeout(r, 2000)); // Delay obrigatório
+
+        addLog('3. Iniciando conexão (Gerando QR)...');
         
-        // Pequeno delay para garantir que o banco registrou a instância
-        await new Promise(r => setTimeout(r, 1000));
-
-        // PASSO 2: CONECTAR EXPLICITAMENTE
+        // PASSO 2: CONECTAR
         const connectRes = await fetch(`${EVOLUTION_URL}/instance/connect/${newSessionId}`, {
              headers: { 'apikey': secretKey }
         });
 
         if (connectRes.ok) {
-            const connectData = await connectRes.json();
-            // Às vezes o connect já retorna o QR
-            if (connectData.qrcode?.base64 || connectData.base64) {
-                 renderQr(connectData.qrcode?.base64 || connectData.base64);
+            const data = await connectRes.json();
+            if (data.qrcode?.base64 || data.base64) {
+                 renderQr(data.qrcode?.base64 || data.base64);
             } else {
-                 addLog('3. Solicitado. Aguardando QR Code via Webhook...');
+                 addLog('Solicitado. Monitorando Webhook...');
                  monitorSession(newSessionId, 1);
             }
         } else {
-            addLog('Erro ao iniciar conexão. Tentando monitorar mesmo assim...');
+            addLog('Erro no comando connect. Monitorando...');
             monitorSession(newSessionId, 1);
         }
 
     } catch (error: any) {
-        console.error(error);
-        addLog(`ERRO: ${error.message}`);
+        addLog(`Erro: ${error.message}`);
         setIsLoading(false);
     }
   };
 
-  const fetchQrCodeFromBackend = async (sessionId: string) => {
-      try {
-          const res = await fetch(`${BACKEND_URL}/qrcode/${sessionId}`);
-          if (res.ok) {
-              const data = await res.json();
-              if (data.base64) {
-                  renderQr(data.base64);
-                  return true;
-              }
-          }
-      } catch (e) { /* ignore */ }
-      return false;
-  };
-
-  const renderQr = (base64: string) => {
-      if (!base64) return;
-      if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
-      setQrCodeData(base64);
-      addLog('QR Code capturado! Escaneie agora.');
-      setIsLoading(false);
-  };
-
+  // Monitora Webhook Cache e Status API
   const monitorSession = async (sessionId: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
       try {
-          // Tenta buscar o QR code no cache do backend (Webhook)
+          // 1. Tenta buscar do nosso backend (Webhook Cache)
           if (!qrCodeData) {
-              const found = await fetchQrCodeFromBackend(sessionId);
-              if (found) return; // Se achou, para de monitorar agressivamente
+              const res = await fetch(`${BACKEND_URL}/qrcode/${sessionId}`);
+              if (res.ok) {
+                  const data = await res.json();
+                  if (data.base64) {
+                      renderQr(data.base64);
+                      return; // QR Achado!
+                  }
+              }
           }
 
-          // Checa estado
+          // 2. Checa status na API
           const stateRes = await fetch(`${EVOLUTION_URL}/instance/connectionState/${sessionId}`, {
               headers: { 'apikey': secretKey }
           });
@@ -204,27 +177,31 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               if (state === 'open') {
                   setIsConnected(true);
                   setQrCodeData(null);
-                  addLog('CONEXÃO ESTABELECIDA! PRONTO.');
+                  addLog('CONECTADO COM SUCESSO!');
                   setIsLoading(false);
                   return; 
               }
-              
-              if (attempt % 5 === 0) {
-                  addLog(`Status: ${state} (Aguarde...)`);
-              }
+              if (attempt % 3 === 0) addLog(`Status: ${state}...`);
           }
 
       } catch (e) { /* ignore */ }
 
-      // Se passou de 60 segundos (30 tentativas * 2s), para
+      // Timeout de 60s
       if (attempt > 30) {
-          addLog('Tempo limite excedido. Tente novamente.');
+          addLog('Tempo limite. Tente reiniciar.');
           setIsLoading(false);
           return;
       }
 
-      // Loop a cada 2 segundos
       timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2000);
+  };
+
+  const renderQr = (base64: string) => {
+      if (!base64) return;
+      if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
+      setQrCodeData(base64);
+      addLog('QR Code recebido!');
+      setIsLoading(false);
   };
 
   if (!isOpen) return null;
@@ -235,73 +212,46 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         
         <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
             <h2 className="text-white font-bold flex items-center gap-2">
-                <i className="fab fa-whatsapp text-green-400"></i> Conexão WhatsApp
+                <i className="fab fa-whatsapp text-green-400"></i> Nova Conexão v7
             </h2>
             <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>
             </button>
         </div>
 
-        <div className="p-6 flex flex-col items-center min-h-[450px]">
+        <div className="p-6 flex flex-col items-center min-h-[400px]">
             
-            {/* Status Log */}
-            <div className="w-full bg-slate-900 p-3 rounded mb-4 text-[10px] font-mono text-green-400 border border-slate-700 h-40 overflow-y-auto shadow-inner">
+            <div className="w-full bg-slate-900 p-3 rounded mb-4 text-[10px] font-mono text-green-400 border border-slate-700 h-32 overflow-y-auto">
                 {statusLog.map((log, i) => (
-                    <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0 break-all">
-                        <span className="text-gray-500 mr-2">{log.time}</span>
-                        {log.msg}
-                    </div>
+                    <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0">{log.time} - {log.msg}</div>
                 ))}
             </div>
 
             {isConnected ? (
                 <div className="flex flex-col items-center animate-fade-in py-8">
-                    <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4 text-green-600 text-4xl shadow-sm border-4 border-green-50">
+                    <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4 text-green-600 text-4xl">
                         <i className="fas fa-check"></i>
                     </div>
-                    <h3 className="text-xl font-bold text-gray-800">Bot Conectado!</h3>
-                    <p className="text-gray-500 text-sm mt-2">Sessão: <span className="font-mono bg-gray-100 px-1 rounded">{currentSessionName}</span></p>
-                    <button 
-                        onClick={handleForceNewConnection}
-                        className="mt-6 text-xs text-red-500 hover:text-red-700 underline"
-                    >
-                        Desconectar e Resetar
-                    </button>
+                    <h3 className="text-xl font-bold text-gray-800">Conectado!</h3>
+                    <button onClick={handleStartConnection} className="mt-6 text-xs text-red-500 underline">Resetar Conexão</button>
                 </div>
             ) : qrCodeData ? (
                 <div className="flex flex-col items-center w-full animate-fade-in">
-                    <div className="bg-white p-2 rounded shadow-lg border-2 border-green-500 relative group">
-                        <img src={qrCodeData} alt="QR Code" className="w-64 h-64 object-contain" />
-                        <div className="absolute inset-0 bg-white/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                            <span className="font-bold text-slate-800 bg-white px-2 py-1 rounded shadow">Escaneie Agora</span>
-                        </div>
-                    </div>
+                    <img src={qrCodeData} alt="QR Code" className="w-64 h-64 object-contain border-4 border-slate-200 rounded-lg" />
                     <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 font-semibold animate-pulse">
                         <i className="fas fa-circle-notch fa-spin"></i> Aguardando leitura...
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-2">QR Code sincronizado via Webhook</p>
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center w-full flex-1">
-                    <div className="text-center mb-6">
-                        <h3 className="font-bold text-gray-800 text-lg">Gerar Nova Conexão</h3>
-                        <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2">
-                           O sistema irá resetar a sessão e solicitar um novo QR Code limpo.
-                        </p>
-                    </div>
-
                     <button 
-                        onClick={handleForceNewConnection}
+                        onClick={handleStartConnection}
                         disabled={isLoading}
-                        className={`w-full py-3 rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-2 text-white text-sm uppercase tracking-wide ${
+                        className={`w-full py-4 rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-2 text-white text-sm uppercase ${
                             isLoading ? 'bg-gray-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700'
                         }`}
                     >
-                        {isLoading ? (
-                            <><i className="fas fa-cog fa-spin"></i> Preparando...</>
-                        ) : (
-                            <><i className="fas fa-qrcode"></i> Iniciar Sessão</>
-                        )}
+                        {isLoading ? 'Iniciando...' : 'Gerar QR Code'}
                     </button>
                 </div>
             )}

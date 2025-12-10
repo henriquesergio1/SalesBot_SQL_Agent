@@ -11,6 +11,12 @@ app.use(cors());
 const PORT = 8080;
 
 // ==================================================================================
+// 0. CACHE EM MEMÓRIA (QR CODES)
+// ==================================================================================
+// Armazena o último QR Code válido recebido via Webhook para cada instância
+const qrCodeCache = new Map();
+
+// ==================================================================================
 // 1. CONFIGURAÇÃO SQL & AI
 // ==================================================================================
 
@@ -570,6 +576,17 @@ app.get('/api/v1/health', async (req, res) => {
     }
 });
 
+// NOVA ROTA PARA FRONTEND BUSCAR QR CODE (PROXY CACHE)
+app.get('/api/v1/qrcode/:instance', (req, res) => {
+    const instance = req.params.instance;
+    const qrcode = qrCodeCache.get(instance);
+    if (qrcode) {
+        res.json({ base64: qrcode });
+    } else {
+        res.status(404).json({ message: "QR Code ainda não gerado ou expirado." });
+    }
+});
+
 app.post('/api/v1/chat', async (req, res) => {
     try {
         const { message, history } = req.body;
@@ -605,11 +622,27 @@ app.post('/api/v1/chat', async (req, res) => {
 // WEBHOOK UPDATE FOR EVOLUTION V2
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const body = req.body;
-    
-    // Aceita qualquer instância criada pelo painel (padrão salesbot_v4_*)
     const instance = body.instance || 'unknown';
-
     const eventType = body.event; 
+
+    // === CAPTURA DE QR CODE ===
+    if (eventType === 'qrcode.updated') {
+        const qrcodeData = body.data?.qrcode?.base64 || body.data?.base64;
+        if (qrcodeData) {
+            console.log(`[Webhook] 📸 QR Code recebido para ${instance}. Salvando em cache.`);
+            qrCodeCache.set(instance, qrcodeData);
+        }
+    }
+
+    // === LIMPEZA DE QR CODE AO CONECTAR ===
+    if (eventType === 'connection.update') {
+        const state = body.data?.state;
+        if (state === 'open') {
+            console.log(`[Webhook] ✅ ${instance} CONECTADO. Limpando QR Cache.`);
+            qrCodeCache.delete(instance);
+        }
+    }
+
     let msg, sender, isFromMe = false;
 
     try {

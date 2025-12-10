@@ -62,10 +62,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       } catch (e) { /* ignore */ }
   };
 
-  const handleRestart = async () => {
-      addLog('Enviando comando de reinício...');
-      await fetch(`${BACKEND_URL}/restart`, { method: 'POST' });
-      setQrCodeData(null);
+  const handleReset = async () => {
+      addLog('⚠️ Enviando comando de reinício...');
+      try {
+          setQrCodeData(null);
+          setStatus('disconnected');
+          
+          await fetch(`${BACKEND_URL}/logout`, { method: 'POST' });
+          
+          addLog('Sessão resetada. Gerando novo QR...');
+      } catch (e) {
+          addLog('Erro ao enviar comando de reset.');
+      }
   };
 
   if (!isOpen) return null;
@@ -98,6 +106,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     </div>
                     <h3 className="text-xl font-bold text-gray-800">Bot Operacional</h3>
                     <p className="text-sm text-gray-500 mt-2">O SalesBot está respondendo mensagens.</p>
+                    <button onClick={handleReset} className="mt-6 px-4 py-2 bg-red-100 text-red-600 rounded-lg text-xs font-bold hover:bg-red-200">
+                        DESCONECTAR / TROCAR NÚMERO
+                    </button>
                 </div>
             ) : qrCodeData ? (
                 <div className="flex flex-col items-center w-full animate-fade-in">
@@ -110,13 +121,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 <div className="flex flex-col items-center justify-center flex-1">
                     <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3"></div>
                     <p className="text-gray-500 font-medium">Iniciando serviço WhatsApp...</p>
-                    <p className="text-xs text-gray-400 mt-1">Isso pode levar alguns segundos.</p>
+                    <p className="text-xs text-gray-400 mt-1">Se demorar, clique em Resetar Sessão abaixo.</p>
                 </div>
             )}
 
             <div className="mt-auto pt-4 w-full flex justify-center border-t border-gray-100">
-                <button onClick={handleRestart} className="text-xs text-red-500 hover:text-red-700 underline">
-                    Forçar Reinício do Serviço
+                <button onClick={handleReset} className="text-xs text-red-500 hover:text-red-700 underline font-semibold">
+                    ⚠️ RESETAR SESSÃO / NOVO QR CODE
                 </button>
             </div>
         </div>

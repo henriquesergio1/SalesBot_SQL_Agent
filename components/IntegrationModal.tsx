@@ -18,28 +18,33 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   
-  // Ref para controlar o polling e evitar loops zumbis
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref para controlar o polling recursivo
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(false);
 
   // URL Base (via Nginx)
   const BASE_URL = `${window.location.origin}/evolution`;
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (isOpen) {
         setSessionName(generateSessionId());
         setQrCodeData(null);
         setStatusLog(['Pronto para iniciar.']);
         setIsConnected(false);
     }
-    return () => stopPolling();
+    return () => {
+        isMountedRef.current = false;
+        stopPolling();
+    };
   }, [isOpen]);
 
-  const addLog = (msg: string) => setStatusLog(prev => [...prev.slice(-5), msg]);
+  const addLog = (msg: string) => setStatusLog(prev => [...prev.slice(-6), msg]);
 
   const stopPolling = () => {
-      if (pollingRef.current) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
+      if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
       }
   };
 
@@ -49,7 +54,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
-    // Novo nome para garantir zero conflito
     const newSession = generateSessionId();
     setSessionName(newSession);
 
@@ -71,11 +75,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             })
         });
 
-        // Se der erro 403/400 informando que já existe, tentamos conectar direto
-        if (!response.ok && response.status !== 403) {
-             addLog(`Aviso criação: ${response.status} ${response.statusText}`);
-        }
-
         const data = await response.json().catch(() => ({}));
         
         // Verifica se o QR Code veio direto na criação
@@ -88,58 +87,66 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             addLog('Instância solicitada. Aguardando API...');
         }
 
-        // INDEPENDENTE do resultado da criação, iniciamos o monitoramento/polling
-        // O QR Code pode aparecer a qualquer momento no endpoint de conexão
-        startMonitoring(newSession);
+        // Inicia polling recursivo
+        monitorSession(newSession, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO REDE: ${error.message}`);
-        // Mesmo com erro, tenta monitorar, vai que a instância subiu
-        startMonitoring(newSession);
+        addLog(`ERRO CRÍTICO: ${error.message}`);
+        // Tenta monitorar mesmo com erro, caso a instância tenha subido
+        monitorSession(newSession, 1);
     } finally {
         setIsLoading(false);
     }
   };
 
-  const startMonitoring = (targetSession: string) => {
-      stopPolling();
-      let attempts = 0;
+  const monitorSession = async (targetSession: string, attempt: number) => {
+      if (!isMountedRef.current) return;
+      
+      // Limite de segurança (2 minutos tentando)
+      if (attempt > 60) {
+          addLog("Tempo esgotado. Tente novamente.");
+          return;
+      }
 
-      pollingRef.current = setInterval(async () => {
-          attempts++;
-          try {
-              // Chama o endpoint de conexão. Na V2, isso retorna o QR Code se estiver desconectado
-              const res = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
-                  headers: { 'apikey': secretKey }
-              });
+      try {
+          const res = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
+              headers: { 'apikey': secretKey }
+          });
 
-              if (res.ok) {
-                  const data = await res.json();
-                  const state = data.instance?.state || data.instance?.status || 'desconhecido';
-                  const qr = data.base64 || data.qrcode?.base64 || data.code; 
+          if (res.ok) {
+              const data = await res.json();
+              const state = data.instance?.state || data.instance?.status;
+              const qr = data.base64 || data.qrcode?.base64 || data.code; 
 
-                  if (state === 'open') {
-                      setIsConnected(true);
-                      setQrCodeData(null);
-                      addLog('SUCESSO: WhatsApp Conectado!');
-                      stopPolling();
-                      return;
-                  }
-
-                  if (qr && qr.length > 100) {
-                      setQrCodeData(qr);
-                      if (attempts % 4 === 0) addLog(`QR Code pronto. (Status: ${state})`);
-                  } else {
-                      if (attempts % 4 === 0) addLog(`Aguardando QR... (Status: ${state})`);
-                  }
-              } else {
-                  if (attempts % 3 === 0) addLog(`Erro API: ${res.status} (Tentando...)`);
+              if (state === 'open') {
+                  setIsConnected(true);
+                  setQrCodeData(null);
+                  addLog('SUCESSO: WhatsApp Conectado!');
+                  return; // Para o polling
               }
-          } catch (e: any) {
-              if (attempts % 3 === 0) addLog(`Erro Poll: ${e.message}`);
+
+              if (qr && qr.length > 100) {
+                  setQrCodeData(qr);
+                  if (attempt % 5 === 0) addLog(`QR Pronto. Escaneie!`);
+              } else {
+                  // Se status for desconhecido, loga o JSON para debug
+                  if (!state) {
+                       if (attempt % 5 === 0) addLog(`Debug JSON: ${JSON.stringify(data).substring(0, 40)}...`);
+                  } else {
+                       if (attempt % 5 === 0) addLog(`Status: ${state}`);
+                  }
+              }
+          } else {
+              // Erros 404/502 são comuns na inicialização
+              if (attempt % 5 === 0) addLog(`API ${res.status}: Aguardando inicialização...`);
           }
-      }, 2000); // Checa a cada 2 segundos
+      } catch (e: any) {
+          if (attempt % 5 === 0) addLog(`Erro Rede: ${e.message}`);
+      }
+
+      // Agenda próxima tentativa (Recursivo)
+      timeoutRef.current = setTimeout(() => monitorSession(targetSession, attempt + 1), 2000);
   };
 
   if (!isOpen) return null;
@@ -160,9 +167,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         <div className="p-6 flex flex-col items-center min-h-[350px]">
             
             {/* Status Log */}
-            <div className="w-full bg-gray-900 p-3 rounded mb-4 text-[11px] font-mono text-green-400 border border-gray-700 h-28 overflow-y-auto shadow-inner">
+            <div className="w-full bg-gray-900 p-3 rounded mb-4 text-[11px] font-mono text-green-400 border border-gray-700 h-32 overflow-y-auto shadow-inner">
                 {statusLog.map((log, i) => (
-                    <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0">
+                    <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0 break-all">
                         <span className="text-gray-500 mr-2">{new Date().toLocaleTimeString().split(' ')[0]}</span>
                         {log}
                     </div>

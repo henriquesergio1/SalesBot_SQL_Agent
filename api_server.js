@@ -326,10 +326,18 @@ async function executeToolCall(name, args) {
 async function runChatAgent(userMessage, history = []) {
     if (!process.env.API_KEY) throw new Error("API Key inválida.");
     
-    // Converte histórico para formato simplificado
+    // Converte histórico para formato simplificado compatível com Groq/OpenAI
     const contextMessages = [
         { role: "system", content: SYSTEM_PROMPT },
-        ...history.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.content })),
+        ...history.map(m => {
+            // Extração robusta do conteúdo (suporta formato simples e formato Gemini parts[])
+            let text = m.content;
+            if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
+                 text = m.parts[0].text;
+            }
+            // Fallback para string vazia se undefined, evitando erro 400
+            return { role: m.role === 'model' ? 'assistant' : 'user', content: text || "" };
+        }),
         { role: "user", content: userMessage }
     ];
 

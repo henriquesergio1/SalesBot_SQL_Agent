@@ -350,7 +350,7 @@ async function runChatAgent(userMessage, history = []) {
 async function runGroqAgent(messages) {
     const groqTools = toolsSchema.map(t => ({ type: "function", function: t }));
     let completion = await groqClient.chat.completions.create({
-        messages, model: "llama3-70b-8192", tools: groqTools, tool_choice: "auto", max_tokens: 1024
+        messages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
     });
     
     let message = completion.choices[0].message;
@@ -367,7 +367,7 @@ async function runGroqAgent(messages) {
                  messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
             }
         }
-        completion = await groqClient.chat.completions.create({ messages, model: "llama3-70b-8192" });
+        completion = await groqClient.chat.completions.create({ messages, model: "llama-3.3-70b-versatile" });
         message = completion.choices[0].message;
     }
     return { text: message.content, data: dataPayload };

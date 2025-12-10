@@ -203,8 +203,8 @@ const tools = [{ functionDeclarations: [salesTeamTool, customerBaseTool, querySa
 
 const SQL_QUERIES = {
     SALES_TEAM_BASE: `SELECT DISTINCT V.CODMTCEPG as 'id', V.nomepg as 'nome', S.nomepg as 'supervisor' FROM flexx10071188.dbo.ibetcplepg V LEFT JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S' WHERE V.TPOEPG IN ('V', 'S', 'M')`,
-    // CORRIGIDO ALIAS DE 'data_visita_ref' PARA 'data_visita'
-    VISITS_QUERY: `DECLARE @DataBase DATE = @targetDate; DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1); DECLARE @DataFimMes DATE = EOMONTH(@DataBase); DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1); DECLARE @FimMesAtual DATE = EOMONTH(@DataBase); ;WITH DatasMes AS ( SELECT @DataInicioMes AS DataVisita UNION ALL SELECT DATEADD(DAY, 1, DataVisita) FROM DatasMes WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes ), DiasComInfo AS ( SELECT d.DataVisita, CASE WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7' WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1' WHEN DATEPART(WEEKDAY, d.DataVisita) = 3 THEN '2' WHEN DATEPART(WEEKDAY, d.DataVisita) = 4 THEN '3' WHEN DATEPART(WEEKDAY, d.DataVisita) = 5 THEN '4' WHEN DATEPART(WEEKDAY, d.DataVisita) = 6 THEN '5' WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6' END AS DiaSemana FROM DatasMes d ), VendasMes AS ( SELECT P.CODCET, SUM(I.VALTOTITEPDD) as TotalVendido FROM flexx10071188.dbo.ibetpdd P INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual AND P.INDSTUMVTPDD = 1 AND P.CODMTCEPG = @sellerId GROUP BY P.CODCET ) SELECT DISTINCT e.CODMTCEPGVDD AS 'cod_vend', epg.NOMEPG AS 'nome_vendedor', a.CODCET AS 'cod_cliente', d.NOMRAZSCLCET AS 'razao_social', MAX(x.DataVisita) AS 'data_visita', a.DESCCOVSTCET AS 'periodicidade', CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura', ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes' FROM flexx10071188.dbo.IBETVSTCET a INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%' INNER JOIN flexx10071188.dbo.IBETCET d ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC INNER JOIN flexx10071188.dbo.IBETCPLEPG epg ON epg.CODMTCEPG = e.CODMTCEPGVDD LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET WHERE d.TPOSTUCET = 'A' AND e.CODMTCEPGVDD = @sellerId GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido ORDER BY status_cobertura, a.CODCET OPTION (MAXRECURSION 1000);`,
+    // CORRIGIDO: Adicionado o comentário '-- AND x.DataVisita = @targetDate' que é usado pelo 'replace' no javascript para ativar o filtro de dia
+    VISITS_QUERY: `DECLARE @DataBase DATE = @targetDate; DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1); DECLARE @DataFimMes DATE = EOMONTH(@DataBase); DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1); DECLARE @FimMesAtual DATE = EOMONTH(@DataBase); ;WITH DatasMes AS ( SELECT @DataInicioMes AS DataVisita UNION ALL SELECT DATEADD(DAY, 1, DataVisita) FROM DatasMes WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes ), DiasComInfo AS ( SELECT d.DataVisita, CASE WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7' WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1' WHEN DATEPART(WEEKDAY, d.DataVisita) = 3 THEN '2' WHEN DATEPART(WEEKDAY, d.DataVisita) = 4 THEN '3' WHEN DATEPART(WEEKDAY, d.DataVisita) = 5 THEN '4' WHEN DATEPART(WEEKDAY, d.DataVisita) = 6 THEN '5' WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6' END AS DiaSemana FROM DatasMes d ), VendasMes AS ( SELECT P.CODCET, SUM(I.VALTOTITEPDD) as TotalVendido FROM flexx10071188.dbo.ibetpdd P INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual AND P.INDSTUMVTPDD = 1 AND P.CODMTCEPG = @sellerId GROUP BY P.CODCET ) SELECT DISTINCT e.CODMTCEPGVDD AS 'cod_vend', epg.NOMEPG AS 'nome_vendedor', a.CODCET AS 'cod_cliente', d.NOMRAZSCLCET AS 'razao_social', MAX(x.DataVisita) AS 'data_visita', a.DESCCOVSTCET AS 'periodicidade', CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura', ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes' FROM flexx10071188.dbo.IBETVSTCET a INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%' INNER JOIN flexx10071188.dbo.IBETCET d ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC INNER JOIN flexx10071188.dbo.IBETCPLEPG epg ON epg.CODMTCEPG = e.CODMTCEPGVDD LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET WHERE d.TPOSTUCET = 'A' AND e.CODMTCEPGVDD = @sellerId -- AND x.DataVisita = @targetDate GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido ORDER BY status_cobertura, a.CODCET OPTION (MAXRECURSION 1000);`,
     OPPORTUNITY_QUERY: `WITH Historico AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) AND C.INDSTUMVTPDD = 1 ), CompradoMesAtual AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND MONTH(C.DATEMSDOCPDD) = MONTH(GETDATE()) AND YEAR(C.DATEMSDOCPDD) = YEAR(GETDATE()) AND C.INDSTUMVTPDD = 1 ) SELECT TOP 10 CONCAT(P.CODCATITE, ' - ', P.DESCATITE) as descricao, CONCAT(G.CODGPOITE, ' - ', G.DESGPOITE) as grupo, P.CODCATITE as cod_produto FROM Historico H LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE INNER JOIN flexx10071188.dbo.IBETGPOITE G ON P.CODGPOITE = G.CODGPOITE WHERE CM.CODCATITE IS NULL`
 };
 
@@ -338,31 +338,57 @@ async function executeToolCall(name, args) {
 // ==================================================================================
 async function runChatAgent(userMessage, history = []) {
     if (!process.env.API_KEY || process.env.API_KEY.includes('COLE_SUA')) throw new Error("API Key inválida.");
-    const chat = aiClient.chats.create({ model: "gemini-2.5-flash", config: { systemInstruction: getSystemInstruction(), tools: tools }, history: history });
+    
+    // Configura o modelo
+    const chat = aiClient.chats.create({ 
+        model: "gemini-2.5-flash", 
+        config: { systemInstruction: getSystemInstruction(), tools: tools }, 
+        history: history 
+    });
+    
     let finalResponse = "";
     let dataForFrontend = null;
-    let result = await chat.sendMessage({ message: userMessage });
-    for (let i = 0; i < 5; i++) {
-        const parts = result.candidates?.[0]?.content?.parts || [];
-        const functionCalls = parts.filter(p => p.functionCall);
-        const textPart = parts.find(p => p.text);
-        if (textPart) finalResponse += textPart.text;
-        if (functionCalls.length === 0) break;
-        const functionResponses = [];
-        for (const call of functionCalls) {
-            const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
-            if (toolResult && toolResult.frontend_data) {
-                // Checa se é visita e garante que a chave 'data_visita' existe (correção para compatibilidade)
-                const isVisit = toolResult.frontend_data[0] && (toolResult.frontend_data[0].data_visita || toolResult.frontend_data[0].data_visita_ref);
+
+    try {
+        let result = await chat.sendMessage({ message: userMessage });
+        
+        // Reduzido de 5 para 3 para evitar erro de cota (429) em conversas longas
+        for (let i = 0; i < 3; i++) {
+            const parts = result.candidates?.[0]?.content?.parts || [];
+            const functionCalls = parts.filter(p => p.functionCall);
+            const textPart = parts.find(p => p.text);
+            
+            if (textPart) finalResponse += textPart.text;
+            
+            if (functionCalls.length === 0) break;
+            
+            const functionResponses = [];
+            for (const call of functionCalls) {
+                const toolResult = await executeToolCall(call.functionCall.name, call.functionCall.args);
                 
-                dataForFrontend = { samples: toolResult.frontend_data, debugMeta: toolResult.debug_meta, totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos };
-                functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult.ai_response } } });
-            } else {
-                functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult } } });
+                if (toolResult && toolResult.frontend_data) {
+                    const isVisit = toolResult.frontend_data[0] && (toolResult.frontend_data[0].data_visita || toolResult.frontend_data[0].data_visita_ref);
+                    
+                    dataForFrontend = { samples: toolResult.frontend_data, debugMeta: toolResult.debug_meta, totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos };
+                    functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult.ai_response } } });
+                } else {
+                    functionResponses.push({ functionResponse: { name: call.functionCall.name, response: { result: toolResult } } });
+                }
             }
+            result = await chat.sendMessage({ message: functionResponses });
         }
-        result = await chat.sendMessage({ message: functionResponses });
+    } catch (error) {
+        console.error("Erro na IA:", error);
+        // Tratamento amigável para erro de cota
+        if (error.message && (error.message.includes('429') || error.message.includes('Quota exceeded'))) {
+            return { 
+                text: "⚠️ **Limite Diário da IA Atingido**\n\nVocê atingiu o limite gratuito da API do Google (20 requisições/dia). Por favor, aguarde a renovação da cota ou configure uma chave de API com faturamento ativo no Google Cloud para remover este limite.",
+                data: null
+            };
+        }
+        throw error;
     }
+
     return { text: finalResponse, data: dataForFrontend };
 }
 

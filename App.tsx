@@ -11,7 +11,7 @@ function App() {
     {
       id: 'welcome',
       role: 'model',
-      content: 'Olá! O agente Frete360 SalesBot está online. Conectado ao container Docker e pronto para consultar o SQL Server.',
+      content: 'Olá! O agente SalesBot Broker Rainha está online. Conectado ao container Docker e pronto para consultar o SQL Server.',
       timestamp: new Date()
     }
   ]);
@@ -122,7 +122,7 @@ function App() {
                 <i className="fas fa-robot text-lg"></i>
              </div>
              <div>
-                <h1 className="text-white font-semibold text-sm">Frete360 SalesBot</h1>
+                <h1 className="text-white font-semibold text-sm">SalesBot Broker Rainha</h1>
                 <div className="flex items-center text-[10px] text-blue-200">
                    <span className={`w-2 h-2 rounded-full mr-1 ${getStatusColor()} animate-pulse`}></span>
                    {getStatusText()}
@@ -211,7 +211,7 @@ function App() {
         <div className="bg-white shadow-sm p-4 h-16 flex items-center justify-between border-b px-6">
            <h2 className="font-semibold text-gray-700 flex items-center gap-2">
               <i className="fas fa-chart-line text-slate-800"></i>
-              Frete360 Intelligence
+              SalesBot Broker Rainha
            </h2>
            <div className="flex items-center gap-3">
              <div className="flex flex-col items-end">

@@ -42,7 +42,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ data }) => {
                       <tbody className="divide-y divide-gray-100">
                           {data.visits.map((v, i) => (
                               <tr key={i} className={`hover:bg-gray-50 ${v.status_cobertura === 'POSITIVADO' ? 'bg-green-50/50' : ''}`}>
-                                  <td className="p-3 font-mono text-gray-500">{new Date(v.data_visita).toLocaleDateString('pt-BR')}</td>
+                                  <td className="p-3 font-mono text-gray-500">
+                                      {v.data_visita ? new Date(v.data_visita).toLocaleDateString('pt-BR') : '-'}
+                                  </td>
                                   <td className="p-3 font-medium text-gray-800">
                                       {v.cod_cliente} - {v.razao_social}
                                       <div className="text-[10px] text-gray-400 font-normal">{v.periodicidade}</div>

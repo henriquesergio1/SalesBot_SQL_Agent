@@ -97,8 +97,8 @@ services:
       evolution-db:
         condition: service_healthy
     volumes:
-      - evolution_v2_instances_clean_v12:/evolution/instances
+      - evolution_v2_instances_clean_v13:/evolution/instances
 
 volumes:
   evolution_pg_data:
-  evolution_v2_instances_clean_v12:
+  evolution_v2_instances_clean_v13:

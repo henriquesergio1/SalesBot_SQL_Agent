@@ -77,6 +77,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
         const data = await response.json().catch(() => ({}));
         
+        // DEBUG DE ROTA: Se retornar count:0, é porque caiu na listagem (GET) em vez de criar (POST)
+        if (data.count !== undefined) {
+             addLog(`ERRO ROTA: Nginx redirecionou POST para GET.`);
+             addLog(`Debug JSON: ${JSON.stringify(data)}`);
+             // Tenta monitorar mesmo assim, vai que criou...
+        }
+
         // Verifica se o QR Code veio direto na criação
         const base64 = data.qrcode?.base64 || data.base64 || data.instance?.qrcode;
 
@@ -93,7 +100,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     } catch (error: any) {
         console.error(error);
         addLog(`ERRO CRÍTICO: ${error.message}`);
-        // Tenta monitorar mesmo com erro, caso a instância tenha subido
         monitorSession(newSession, 1);
     } finally {
         setIsLoading(false);
@@ -132,7 +138,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               } else {
                   // Se status for desconhecido, loga o JSON para debug
                   if (!state) {
-                       if (attempt % 5 === 0) addLog(`Debug JSON: ${JSON.stringify(data).substring(0, 40)}...`);
+                       if (attempt % 5 === 0) addLog(`Aguardando... (Tentativa ${attempt})`);
                   } else {
                        if (attempt % 5 === 0) addLog(`Status: ${state}`);
                   }

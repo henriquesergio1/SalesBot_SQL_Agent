@@ -416,7 +416,7 @@ async function executeToolCall(name, args) {
                 INNER JOIN flexx10071188.dbo.IBETFAMITE IBETFAMITE ON IBETCATITE.CODFAMITE = IBETFAMITE.CODFAMITE AND IBETFAMITE.CODGPOITE = IBETCATITE.CODGPOITE
                 INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET
                 INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI
-                INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD
+                INNER JOIN flexx10071188.dbo.IBETFAD IBETCET.CODFAD = IBETFAD.CODFAD
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2
                 LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3
             `;
@@ -602,23 +602,26 @@ app.post('/api/v1/chat', async (req, res) => {
     }
 });
 
-// WEBHOOK UPDATE FOR EVOLUTION V2
+// WEBHOOK UPDATE FOR EVOLUTION V1.6.2
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
-    const data = req.body;
+    const body = req.body;
+    
+    // v1: body = { type: '...', instance: '...', data: { key: ..., message: ... } }
+    const instance = body.instance || 'unknown_instance';
+    const type = body.type; // 'MESSAGE_UPSERT', etc.
+
     let msg, sender;
 
     try {
-        if (data.data?.message) {
-            msg = data.data.message.conversation || data.data.message.extendedTextMessage?.text;
-            sender = data.data.key.remoteJid;
-        } else if (data.data?.key) {
-            sender = data.data.key.remoteJid;
+        const data = body.data;
+        if (data && (type === 'MESSAGE_UPSERT' || data.message)) {
+             sender = data.key?.remoteJid;
+             msg = data.message?.conversation || 
+                   data.message?.extendedTextMessage?.text;
         }
     } catch(e) { console.log("Webhook parse fail", e); }
 
-    const instance = data.instance || 'salesbot_v2';
-
-    console.log(`[Webhook] Instance: ${instance} | Sender: ${sender} | Msg: ${msg ? msg.substring(0, 15) : 'MEDIA/SYSTEM'}`);
+    console.log(`[Webhook v1] Instance: ${instance} | Sender: ${sender} | Msg: ${msg ? msg.substring(0, 15) : 'MEDIA/SYSTEM'}`);
 
     if (msg && sender && !sender.includes('@g.us')) {
         runChatAgent(msg).then(resp => {
@@ -628,23 +631,21 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// SEND MESSAGE UPDATE FOR EVOLUTION V2 (STRICT)
+// SEND MESSAGE UPDATE FOR EVOLUTION V1.6.2
 async function sendWhatsappMessage(to, text, session) {
     const gatewayUrl = process.env.GATEWAY_URL || 'http://whatsapp-gateway:8080'; 
     const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
     const number = to.replace('@s.whatsapp.net', '');
     
     try {
-        // Envio estritamente compatível com JSON v2
-        const response = await fetch(`${gatewayUrl}/message/send/text/${session}`, {
+        // v1 Endpoint: /message/sendText/{instance}
+        const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify({ 
                 number: number, 
-                text: text, // Campo simplificado aceito pela maioria das builds v2
-                options: {
-                    delay: 1200
-                }
+                text: text, 
+                options: { delay: 1200 }
             })
         });
         
@@ -657,4 +658,4 @@ async function sendWhatsappMessage(to, text, session) {
     } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V2 Upgrade running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V1.6 Compatible running on ${PORT}`));

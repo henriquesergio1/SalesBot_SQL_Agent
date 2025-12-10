@@ -7,7 +7,7 @@ interface IntegrationModalProps {
 }
 
 // Gera ID aleatório para garantir sessão limpa
-const generateSessionId = () => `sessao_${Math.floor(Math.random() * 10000)}`;
+const generateSessionId = () => `bot_${Math.floor(Math.random() * 10000)}`;
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   const [sessionName, setSessionName] = useState(generateSessionId()); 
@@ -18,7 +18,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   
-  // Ref para controlar o polling recursivo
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(false);
 
@@ -30,7 +29,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     if (isOpen) {
         setSessionName(generateSessionId());
         setQrCodeData(null);
-        setStatusLog(['Pronto para iniciar.']);
+        setStatusLog(['Sistema pronto.']);
         setIsConnected(false);
     }
     return () => {
@@ -58,50 +57,57 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setSessionName(newSession);
 
     try {
-        // 1. TENTATIVA DE CRIAÇÃO
+        // 1. CRIAÇÃO DA INSTÂNCIA (v1.6.2)
         addLog(`1. Criando sessão (${newSession})...`);
         const createUrl = `${BASE_URL}/instance/create`;
         
-        const response = await fetch(createUrl, {
+        const createRes = await fetch(createUrl, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
                 'apikey': secretKey 
             },
-            body: JSON.stringify({ 
-                instanceName: newSession, 
-                qrcode: true, 
-                integration: "WHATSAPP-BAILEYS" 
-            })
+            body: JSON.stringify({ instanceName: newSession })
         });
 
-        const data = await response.json().catch(() => ({}));
-        
-        // DEBUG DE ROTA: Se retornar count:0, é porque caiu na listagem (GET) em vez de criar (POST)
-        if (data.count !== undefined) {
-             addLog(`ERRO ROTA: Nginx redirecionou POST para GET.`);
-             addLog(`Debug JSON: ${JSON.stringify(data)}`);
-             // Tenta monitorar mesmo assim, vai que criou...
-        }
-
-        // Verifica se o QR Code veio direto na criação
-        const base64 = data.qrcode?.base64 || data.base64 || data.instance?.qrcode;
-
-        if (base64) {
-            setQrCodeData(base64);
-            addLog('QR Code Recebido! Escaneie agora.');
+        if (!createRes.ok) {
+            const err = await createRes.json();
+            // Se já existe, tentamos conectar nela
+            if (err.message && err.message.includes('already exists')) {
+                addLog('Sessão já existe. Conectando...');
+            } else {
+                throw new Error(err.message || 'Erro ao criar instância');
+            }
         } else {
-            addLog('Instância solicitada. Aguardando API...');
+             addLog('Instância criada com sucesso.');
         }
 
-        // Inicia polling recursivo
+        // Delay curto para garantir propagação
+        await new Promise(r => setTimeout(r, 1000));
+
+        // 2. SOLICITAR CONEXÃO / QR CODE
+        addLog('2. Solicitando QR Code...');
+        const connectUrl = `${BASE_URL}/instance/connect/${newSession}`;
+        const connectRes = await fetch(connectUrl, {
+             headers: { 'apikey': secretKey }
+        });
+
+        if (connectRes.ok) {
+            const data = await connectRes.json();
+            if (data.base64) {
+                setQrCodeData(data.base64);
+                addLog('QR Code recebido!');
+            } else {
+                 addLog('QR Code não retornado imediatamente.');
+            }
+        }
+
+        // 3. INICIAR MONITORAMENTO
         monitorSession(newSession, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO CRÍTICO: ${error.message}`);
-        monitorSession(newSession, 1);
-    } finally {
+        addLog(`ERRO: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -112,43 +118,46 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       // Limite de segurança (2 minutos tentando)
       if (attempt > 60) {
           addLog("Tempo esgotado. Tente novamente.");
+          setIsLoading(false);
           return;
       }
 
       try {
-          const res = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
+          // Checa Estado da Conexão
+          const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${targetSession}`, {
               headers: { 'apikey': secretKey }
           });
 
-          if (res.ok) {
-              const data = await res.json();
-              const state = data.instance?.state || data.instance?.status;
-              const qr = data.base64 || data.qrcode?.base64 || data.code; 
+          if (stateRes.ok) {
+              const data = await stateRes.json();
+              const state = data.instance?.state || 'unknown';
 
               if (state === 'open') {
                   setIsConnected(true);
                   setQrCodeData(null);
                   addLog('SUCESSO: WhatsApp Conectado!');
+                  setIsLoading(false);
                   return; // Para o polling
               }
 
-              if (qr && qr.length > 100) {
-                  setQrCodeData(qr);
-                  if (attempt % 5 === 0) addLog(`QR Pronto. Escaneie!`);
-              } else {
-                  // Se status for desconhecido, loga o JSON para debug
-                  if (!state) {
-                       if (attempt % 5 === 0) addLog(`Aguardando... (Tentativa ${attempt})`);
-                  } else {
-                       if (attempt % 5 === 0) addLog(`Status: ${state}`);
+              if (state === 'connecting' || state === 'close') {
+                  if (attempt % 3 === 0) addLog(`Status: ${state}... aguardando leitura.`);
+                  
+                  // Se não temos QR Code ainda, tenta buscar novamente
+                  if (!qrCodeData && attempt % 5 === 0) {
+                       const qrRes = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
+                            headers: { 'apikey': secretKey }
+                       });
+                       const qrData = await qrRes.json();
+                       if (qrData.base64) {
+                           setQrCodeData(qrData.base64);
+                           addLog('QR Code atualizado.');
+                       }
                   }
               }
-          } else {
-              // Erros 404/502 são comuns na inicialização
-              if (attempt % 5 === 0) addLog(`API ${res.status}: Aguardando inicialização...`);
           }
       } catch (e: any) {
-          if (attempt % 5 === 0) addLog(`Erro Rede: ${e.message}`);
+          // Ignora erros de rede temporários
       }
 
       // Agenda próxima tentativa (Recursivo)
@@ -206,7 +215,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         <p className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-1 rounded inline-block mt-1">Sessão: {sessionName}</p>
                     </div>
                     <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 font-semibold animate-pulse">
-                        <i className="fas fa-sync fa-spin"></i> Sincronizando conexão...
+                        <i className="fas fa-sync fa-spin"></i> Aguardando leitura...
                     </div>
                 </div>
             ) : (
@@ -217,7 +226,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </div>
                         <h3 className="font-bold text-gray-800 text-lg">Conectar SalesBot</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2 leading-relaxed">
-                            O sistema irá gerar uma nova sessão segura no servidor. 
+                            O sistema irá gerar uma nova sessão v1.6.2. 
                             <br/>Tenha seu celular em mãos.
                         </p>
                     </div>

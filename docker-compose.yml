@@ -88,8 +88,8 @@ services:
       - POSTGRES_PASSWORD=evolutionpass
       - POSTGRES_DB=evolution
     volumes:
-      # NOME DO VOLUME ALTERADO PARA V3 PARA LIMPEZA TOTAL DE ZUMBIS
-      - evolution_data_v3_clean:/var/lib/postgresql/data
+      # NOME DO VOLUME ALTERADO PARA V4 (FINAL) PARA GARANTIR BASE LIMPA
+      - evolution_data_v4_final:/var/lib/postgresql/data
     command: ["postgres", "-c", "max_connections=200"]
 
   # 5. Redis for Evolution API
@@ -100,4 +100,4 @@ services:
     command: ["redis-server", "--appendonly", "no"]
 
 volumes:
-  evolution_data_v3_clean:
+  evolution_data_v4_final:

@@ -11,9 +11,6 @@ interface LogEntry {
     msg: string;
 }
 
-// INSTÂNCIA ÚNICA FIXA PARA EVITAR ZUMBIS
-const STATIC_SESSION_NAME = 'salesbot_main';
-
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
   const [secretKey] = useState('minha-senha-secreta-api');
   
@@ -21,6 +18,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [statusLog, setStatusLog] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [currentSessionName, setCurrentSessionName] = useState<string>('');
   
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(false);
@@ -30,11 +28,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   useEffect(() => {
     isMountedRef.current = true;
+    
+    // Recupera sessão salva ou prepara para criar
+    const savedSession = localStorage.getItem('salesbot_session_id');
+    
     if (isOpen) {
         setQrCodeData(null);
-        setStatusLog([{ time: getCurrentTime(), msg: 'Sistema Iniciado (Clean Mode)' }]);
-        // Ao abrir, verifica status sem forçar recriação imediata
-        checkInitialStatus();
+        setStatusLog([{ time: getCurrentTime(), msg: 'Painel de Conexão Aberto' }]);
+        
+        if (savedSession) {
+            setCurrentSessionName(savedSession);
+            checkInitialStatus(savedSession);
+        } else {
+            addLog('Nenhuma sessão ativa encontrada.');
+        }
     }
     return () => {
         isMountedRef.current = false;
@@ -55,20 +62,27 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
   };
 
-  const checkInitialStatus = async () => {
+  const checkInitialStatus = async (sessionName: string) => {
       try {
-          const res = await fetch(`${BASE_URL}/instance/connectionState/${STATIC_SESSION_NAME}`, {
+          addLog(`Verificando status de ${sessionName}...`);
+          const res = await fetch(`${BASE_URL}/instance/connectionState/${sessionName}`, {
               headers: { 'apikey': secretKey }
           });
           if (res.ok) {
               const data = await res.json();
-              if (data.instance?.state === 'open') {
+              if (data.instance?.state === 'open' || data.state === 'open') {
                   setIsConnected(true);
-                  addLog('Instância já está conectada.');
+                  addLog('Instância já está conectada e operante.');
+              } else {
+                  addLog(`Status atual: ${data.instance?.state || data.state || 'Desconhecido'}`);
               }
+          } else {
+              addLog('Instância não encontrada na API.');
+              localStorage.removeItem('salesbot_session_id'); // Limpa se não existir na API
+              setCurrentSessionName('');
           }
       } catch (e) {
-          // Instância não existe provavelmente
+          addLog('Erro ao verificar status inicial.');
       }
   };
 
@@ -78,31 +92,38 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
+    // Gera um ID totalmente novo para evitar conflito com "zumbis" no banco
+    const newSessionId = `salesbot_v4_${Math.floor(Math.random() * 10000)}`;
+    const oldSessionId = localStorage.getItem('salesbot_session_id');
+
     try {
-        // 1. LIMPEZA PROFUNDA (DELETE)
-        addLog(`1. Removendo instância antiga...`);
-        try {
-            // Tenta logout primeiro para limpar socket
-            await fetch(`${BASE_URL}/instance/logout/${STATIC_SESSION_NAME}`, {
-                 method: 'DELETE', headers: { 'apikey': secretKey }
-            });
-            // Tenta deletar
-            await fetch(`${BASE_URL}/instance/delete/${STATIC_SESSION_NAME}`, {
-                method: 'DELETE',
-                headers: { 'apikey': secretKey }
-            });
-            await new Promise(r => setTimeout(r, 2000)); // Espera banco liberar
-        } catch (e) { 
-            console.log("Delete error ignored", e);
+        // 1. LIMPEZA (Se existir antiga)
+        if (oldSessionId) {
+            addLog(`Limpando sessão antiga (${oldSessionId})...`);
+            try {
+                await fetch(`${BASE_URL}/instance/logout/${oldSessionId}`, {
+                     method: 'DELETE', headers: { 'apikey': secretKey }
+                });
+                await fetch(`${BASE_URL}/instance/delete/${oldSessionId}`, {
+                    method: 'DELETE',
+                    headers: { 'apikey': secretKey }
+                });
+            } catch (e) { /* ignore */ }
+            localStorage.removeItem('salesbot_session_id');
         }
 
         // 2. CRIAÇÃO NOVA
-        addLog(`2. Criando instância '${STATIC_SESSION_NAME}'...`);
+        addLog(`Criando nova instância limpa: ${newSessionId}`);
+        
+        // Define o novo ID antes de criar
+        setCurrentSessionName(newSessionId);
+        localStorage.setItem('salesbot_session_id', newSessionId);
+
         const createRes = await fetch(`${BASE_URL}/instance/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
             body: JSON.stringify({ 
-                instanceName: STATIC_SESSION_NAME,
+                instanceName: newSessionId,
                 qrcode: true, 
                 integration: "WHATSAPP-BAILEYS",
                 rejectUnauthorized: false
@@ -115,7 +136,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         }
 
         const createData = await createRes.json();
-        addLog('Instância recriada com sucesso.');
+        addLog('Instância criada. Aguardando QR...');
 
         // Se o QR vier na criação, mostra
         if (createData.qrcode?.base64 || createData.base64) {
@@ -123,11 +144,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         }
 
         // 3. POLLING DE QR CODE
-        monitorSession(1);
+        monitorSession(newSessionId, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO: ${error.message}`);
+        addLog(`ERRO FATAL: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -136,15 +157,15 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!base64) return;
       if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
       setQrCodeData(base64);
-      addLog('QR Code Pronto para Leitura.');
+      addLog('QR Code Recebido!');
   };
 
-  const monitorSession = async (attempt: number) => {
+  const monitorSession = async (sessionId: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
       try {
           // Verifica estado
-          const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${STATIC_SESSION_NAME}`, {
+          const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${sessionId}`, {
               headers: { 'apikey': secretKey }
           });
 
@@ -160,12 +181,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return; 
               }
               
-              if (attempt % 4 === 0) addLog(`Status atual: ${state}...`);
+              if (state === 'connecting') {
+                 addLog(`Tentativa ${attempt}: Conectando...`);
+              }
           }
 
-          // Busca QR Code explicitamente
+          // Busca QR Code explicitamente se ainda não conectado
           if (!isConnected) {
-               const qrRes = await fetch(`${BASE_URL}/instance/connect/${STATIC_SESSION_NAME}`, {
+               const qrRes = await fetch(`${BASE_URL}/instance/connect/${sessionId}`, {
                     headers: { 'apikey': secretKey }
                });
                if (qrRes.ok) {
@@ -179,8 +202,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           // ignore network glitches
       }
 
-      // Tenta novamente em 2s
-      timeoutRef.current = setTimeout(() => monitorSession(attempt + 1), 2000);
+      // Tenta novamente em 2.5s
+      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2500);
   };
 
   if (!isOpen) return null;
@@ -216,7 +239,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         <i className="fas fa-check"></i>
                     </div>
                     <h3 className="text-xl font-bold text-gray-800">Bot Conectado!</h3>
-                    <p className="text-gray-500 text-sm mt-2">O SalesBot está operando na instância <span className="font-mono bg-gray-100 px-1 rounded">{STATIC_SESSION_NAME}</span>.</p>
+                    <p className="text-gray-500 text-sm mt-2">Sessão: <span className="font-mono bg-gray-100 px-1 rounded">{currentSessionName}</span>.</p>
+                    <button 
+                        onClick={handleForceNewConnection}
+                        className="mt-6 text-xs text-red-500 hover:text-red-700 underline"
+                    >
+                        Desconectar e Resetar
+                    </button>
                 </div>
             ) : qrCodeData ? (
                 <div className="flex flex-col items-center w-full animate-fade-in">
@@ -229,13 +258,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 font-semibold animate-pulse">
                         <i className="fas fa-circle-notch fa-spin"></i> Aguardando leitura...
                     </div>
+                    <p className="text-xs text-gray-400 mt-2">ID: {currentSessionName}</p>
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center w-full flex-1">
                     <div className="text-center mb-6">
-                        <h3 className="font-bold text-gray-800 text-lg">Gerenciar Conexão</h3>
+                        <h3 className="font-bold text-gray-800 text-lg">Gerar Nova Conexão</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2">
-                           Clique abaixo para limpar sessões antigas e gerar um novo QR Code.
+                           Clique para criar uma nova sessão limpa e gerar o QR Code.
                         </p>
                     </div>
 
@@ -247,9 +277,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         }`}
                     >
                         {isLoading ? (
-                            <><i className="fas fa-cog fa-spin"></i> Configurando...</>
+                            <><i className="fas fa-cog fa-spin"></i> Processando...</>
                         ) : (
-                            <><i className="fas fa-power-off"></i> Gerar Novo QR Code</>
+                            <><i className="fas fa-qrcode"></i> Criar Nova Sessão</>
                         )}
                     </button>
                 </div>

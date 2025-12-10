@@ -91,7 +91,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setIsConnected(false);
     
     // Novo ID limpo
-    const newSessionId = `salesbot_v8_${Math.floor(Math.random() * 10000)}`;
+    const newSessionId = `salesbot_v9_${Math.floor(Math.random() * 10000)}`;
     
     // Tenta limpar anterior se existir
     const oldSessionId = localStorage.getItem('salesbot_session_id');
@@ -123,8 +123,9 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
         if (!createRes.ok) throw new Error('Falha ao criar instância.');
         
-        addLog('2. Instância criada. Aguardando...');
-        await new Promise(r => setTimeout(r, 2000));
+        // AUMENTO DO DELAY DE 2s PARA 5s (CRUCIAL PARA DOCKER LENTO)
+        addLog('2. Aguardando inicialização do Chrome (5s)...');
+        await new Promise(r => setTimeout(r, 5000));
 
         addLog('3. Solicitando conexão...');
         // 2. SOLICITAR CONEXÃO
@@ -137,7 +138,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             if (data.qrcode?.base64 || data.base64) {
                  renderQr(data.qrcode?.base64 || data.base64);
             } else {
-                 addLog('Conexão iniciada. Aguardando QR...');
+                 addLog('Conexão iniciada. Monitorando Webhook...');
                  monitorSession(newSessionId, 1);
             }
         } else {
@@ -156,7 +157,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!isMountedRef.current) return;
       
       try {
-          // 1. Tenta buscar do nosso backend (Webhook Cache)
+          // 1. Tenta buscar do nosso backend (Webhook Cache) - Mais rápido e confiável
           if (!qrCodeData) {
               const res = await fetch(`${BACKEND_URL}/qrcode/${sessionId}`);
               if (res.ok) {
@@ -186,7 +187,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
               // Não loga "connecting" toda hora para não poluir
               if (state !== 'connecting' || attempt % 5 === 0) {
-                   addLog(`Status: ${state}`);
+                   addLog(`Status API: ${state}`);
               }
           }
 
@@ -214,7 +215,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
              if (data.qrcode?.base64 || data.base64) {
                   renderQr(data.qrcode?.base64 || data.base64);
              } else {
-                  addLog('API não retornou imagem ainda.');
+                  // Se conectar não retornar, tenta o endpoint direto de fetchInstances
+                  addLog('Tentando busca profunda...');
+                  const fetchRes = await fetch(`${EVOLUTION_URL}/instance/fetchInstances`, {
+                      headers: { 'apikey': secretKey }
+                  });
+                  if (fetchRes.ok) {
+                      const instances = await fetchRes.json();
+                      const myInstance = instances.find((i: any) => i.instance.instanceName === currentSessionName);
+                      if (myInstance && myInstance.qrcode && myInstance.qrcode.base64) {
+                          renderQr(myInstance.qrcode.base64);
+                      } else {
+                          addLog('QR Code ainda não gerado.');
+                      }
+                  }
              }
           }
       } catch (e) { addLog('Erro ao buscar QR.'); }
@@ -236,7 +250,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         
         <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
             <h2 className="text-white font-bold flex items-center gap-2">
-                <i className="fab fa-whatsapp text-green-400"></i> Conexão WhatsApp v8
+                <i className="fab fa-whatsapp text-green-400"></i> Conexão WhatsApp v9
             </h2>
             <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>

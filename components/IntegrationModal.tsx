@@ -39,7 +39,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   useEffect(() => {
     isMountedRef.current = true;
     if (isOpen) {
-        // Não reseta a sessão toda vez, usa a persistente
         setQrCodeData(null);
         setStatusLog([{ time: getCurrentTime(), msg: 'Sistema pronto v2.2.2' }]);
         setIsConnected(false);
@@ -74,7 +73,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       } catch (error: any) {
           clearTimeout(id);
           if (error.name === 'AbortError') {
-              throw new Error('O servidor demorou muito para responder (Timeout).');
+              throw new Error('Timeout: Servidor demorou responder.');
           }
           throw error;
       }
@@ -86,12 +85,25 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
-    // Usa a sessão persistente
     const currentSession = sessionName;
 
     try {
-        // 1. CRIAÇÃO DA INSTÂNCIA (Timeout longo de 60s para evitar erro de signal aborted)
-        addLog(`1. Criando sessão (${currentSession})...`);
+        // 0. LIMPEZA PREVENTIVA (Kill Zombie Session)
+        // Isso resolve o problema de ficar travado em "connecting"
+        addLog(`0. Limpando sessão anterior...`);
+        try {
+            await fetchWithTimeout(`${BASE_URL}/instance/delete/${currentSession}`, {
+                method: 'DELETE',
+                headers: { 'apikey': secretKey }
+            }, 5000);
+            // Pequeno delay para o banco liberar
+            await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+            // Ignora erro se a sessão não existia
+        }
+
+        // 1. CRIAÇÃO DA INSTÂNCIA (Nova e Limpa)
+        addLog(`1. Criando nova sessão (${currentSession})...`);
         const createUrl = `${BASE_URL}/instance/create`;
         
         const createRes = await fetchWithTimeout(createUrl, {
@@ -102,41 +114,37 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             },
             body: JSON.stringify({ 
                 instanceName: currentSession,
-                qrcode: true, // Força geração imediata
-                integration: "WHATSAPP-BAILEYS"
+                qrcode: true, // Importante: true para já pedir o QR
+                integration: "WHATSAPP-BAILEYS",
+                rejectUnauthorized: false
             })
-        }, 60000); // 60 segundos de timeout
+        }, 60000); 
 
         if (!createRes.ok) {
             const err = await createRes.json();
-            if (err.error?.includes('already exists') || err.instance?.status === 'already_exists') {
-                addLog('Sessão já existe. Conectando...');
-            } else {
-                console.error(err);
-                addLog(`Info: ${err.message || createRes.statusText}`);
-            }
+            console.error(err);
+            addLog(`Erro Criação: ${err.message || createRes.statusText}`);
         } else {
              const data = await createRes.json();
-             addLog('Instância configurada.');
+             addLog('Instância criada com sucesso.');
              
-             // Tenta extrair QR code da resposta de criação
+             // Tenta extrair QR code da resposta inicial
              const initialQr = data.qrcode?.base64 || data.base64 || data.hash?.base64;
              if (initialQr) {
                  let base64 = initialQr;
                  if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
                  setQrCodeData(base64);
-                 addLog('QR Code recebido na criação!');
+                 addLog('QR Code gerado!');
              }
         }
 
-        // 2. INICIAR MONITORAMENTO
-        // Pequeno delay para garantir que o servidor processou
-        await new Promise(r => setTimeout(r, 1500));
+        // 2. INICIAR MONITORAMENTO AGRESSIVO
+        await new Promise(r => setTimeout(r, 1000));
         monitorSession(currentSession, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO: ${error.message}`);
+        addLog(`ERRO FATAL: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -144,17 +152,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const monitorSession = async (targetSession: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
-      if (attempt > 60) {
-          addLog("Tempo limite de conexão excedido.");
+      if (attempt > 100) { // Tenta por mais tempo (aprox 3 min)
+          addLog("Tempo esgotado. Tente novamente.");
           setIsLoading(false);
           return;
       }
 
       try {
-          // A. Checa Estado da Conexão
+          // A. Checa Estado
+          // Usando connect/ diretamente também serve para checar status indiretamente se retornar QR
           const stateRes = await fetchWithTimeout(`${BASE_URL}/instance/connectionState/${targetSession}`, {
               headers: { 'apikey': secretKey }
-          }, 10000);
+          }, 5000);
 
           if (stateRes.ok) {
               const data = await stateRes.json();
@@ -165,7 +174,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   setQrCodeData(null);
                   addLog('SUCESSO: WhatsApp Conectado!');
                   setIsLoading(false);
-                  return; // Para o polling
+                  return; 
               }
               
               if (attempt % 5 === 0) {
@@ -173,34 +182,38 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
           }
 
-          // B. Busca QR Code se ainda não temos ou para atualizar
+          // B. Busca QR Code (Se não estiver conectado)
           if (!isConnected) {
-               // Busca QR Code a cada iteração se não tivermos imagem, ou a cada 5s para renovar
-               if (!qrCodeData || attempt % 3 === 0) {
-                   const qrRes = await fetchWithTimeout(`${BASE_URL}/instance/connect/${targetSession}`, {
-                        headers: { 'apikey': secretKey }
-                   }, 10000);
+               // Chama connect a cada ciclo. Na v2 isso retorna o QR atualizado ou erro se já conectado
+               const qrRes = await fetchWithTimeout(`${BASE_URL}/instance/connect/${targetSession}`, {
+                    headers: { 'apikey': secretKey }
+               }, 5000);
+               
+               if (qrRes.ok) {
+                   const qrData = await qrRes.json();
+                   let base64 = qrData.base64 || qrData.qrcode?.base64 || qrData.picture;
                    
-                   if (qrRes.ok) {
-                       const qrData = await qrRes.json();
-                       let base64 = qrData.base64 || qrData.qrcode?.base64 || qrData.picture;
+                   if (base64) {
+                       if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
                        
-                       if (base64) {
-                           if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
-                           setQrCodeData(base64);
-                           if (attempt % 5 === 0) addLog('QR Code atualizado.');
-                       }
+                       // Só atualiza se mudou, para evitar flicker, mas garante que mostre se estava null
+                       setQrCodeData(prev => {
+                           if (prev !== base64) return base64;
+                           return prev;
+                       });
+                       
+                       // Log visual apenas na primeira vez ou periodicamente
+                       if (!qrCodeData) addLog('QR Code recebido/atualizado.');
                    }
                }
           }
 
       } catch (e: any) {
-          // Ignora erros de rede temporários no polling
-          if (attempt % 5 === 0) console.warn("Polling error:", e.message);
+          // Silencioso no console, mas não para o loop
       }
 
-      // Loop de 2s
-      timeoutRef.current = setTimeout(() => monitorSession(targetSession, attempt + 1), 2000);
+      // Loop Rápido (1.5s) para pegar o QR code logo que sair do estado "connecting"
+      timeoutRef.current = setTimeout(() => monitorSession(targetSession, attempt + 1), 1500);
   };
 
   if (!isOpen) return null;
@@ -270,7 +283,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </div>
                         <h3 className="font-bold text-gray-800 text-lg">Conectar SalesBot</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2 leading-relaxed">
-                            O sistema irá configurar a API v2.2.2 e solicitar o QR Code à Evolution.
+                            O sistema irá Resetar e Reconfigurar a sessão da API v2.2.2.
                         </p>
                     </div>
 
@@ -282,7 +295,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         }`}
                     >
                         {isLoading ? (
-                            <><i className="fas fa-circle-notch fa-spin"></i> Aguardando API (até 1min)...</>
+                            <><i className="fas fa-circle-notch fa-spin"></i> Aguardando API...</>
                         ) : (
                             <><i className="fas fa-magic"></i> Gerar Novo QR Code</>
                         )}

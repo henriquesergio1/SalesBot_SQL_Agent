@@ -47,9 +47,18 @@ services:
       - "8082:8080"
     environment:
       - SERVER_PORT=8080
+      - SERVER_URL=http://whatsapp-gateway:8080
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - QRCODE_LIMIT=30
+      # Otimização para evitar travamentos
+      - WHERENOW_ENABLED=false
+      - GROUPS_IGNORE=true
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=false
+      - DATABASE_SAVE_DATA_CONTACTS=false
+      - DATABASE_SAVE_DATA_CHATS=false
       # Database (Postgres) - Required for v2
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
@@ -90,5 +99,4 @@ services:
     command: ["redis-server", "--appendonly", "no"]
 
 volumes:
-  # Volume novo para garantir credenciais corretas
   evolution_data_fresh:

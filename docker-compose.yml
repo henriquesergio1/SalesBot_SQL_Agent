@@ -49,6 +49,7 @@ services:
       - SERVER_PORT=8080
       - AUTHENTICATION_API_KEY=minha-senha-secreta-api
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - QRCODE_LIMIT=30
       # Database (Postgres) - Required for v2
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql

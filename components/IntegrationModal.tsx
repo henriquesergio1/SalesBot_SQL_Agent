@@ -56,6 +56,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
   };
 
+  // Helper para fetch com timeout
+  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 5000) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      try {
+          const response = await fetch(url, { ...options, signal: controller.signal });
+          clearTimeout(id);
+          return response;
+      } catch (error) {
+          clearTimeout(id);
+          throw error;
+      }
+  };
+
   const handleConnect = async () => {
     stopPolling();
     setIsLoading(true);
@@ -66,11 +80,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setSessionName(newSession);
 
     try {
-        // 1. CRIAÇÃO DA INSTÂNCIA
+        // 1. CRIAÇÃO DA INSTÂNCIA (Com qrcode: true para tentar pegar de imediato)
         addLog(`1. Criando sessão (${newSession})...`);
         const createUrl = `${BASE_URL}/instance/create`;
         
-        const createRes = await fetch(createUrl, {
+        const createRes = await fetchWithTimeout(createUrl, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
@@ -78,7 +92,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             },
             body: JSON.stringify({ 
                 instanceName: newSession,
-                qrcode: false,
+                qrcode: true, // MUDANÇA: True para forçar geração imediata
                 integration: "WHATSAPP-BAILEYS"
             })
         });
@@ -89,22 +103,31 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 addLog('Sessão restaurada.');
             } else {
                 console.error(err);
-                addLog(`Erro criação: ${err.message || 'Desconhecido'}`);
+                addLog(`Erro criação: ${err.message || createRes.statusText}`);
             }
         } else {
+             const data = await createRes.json();
              addLog('Instância configurada.');
+             
+             // Tenta extrair QR code da resposta de criação
+             const initialQr = data.qrcode?.base64 || data.base64 || data.hash?.base64;
+             if (initialQr) {
+                 let base64 = initialQr;
+                 if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
+                 setQrCodeData(base64);
+                 addLog('QR Code recebido na criação!');
+             }
         }
 
         // Aguarda propagação
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
 
-        // 2. INICIAR MONITORAMENTO IMEDIATO
-        // O monitor vai buscar o QR Code se precisar
+        // 2. INICIAR MONITORAMENTO
         monitorSession(newSession, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO: ${error.message}`);
+        addLog(`ERRO CRÍTICO: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -112,8 +135,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const monitorSession = async (targetSession: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
-      // Limite de tentativas (aprox 2 minutos)
-      if (attempt > 60) {
+      // Limite de tentativas estendido
+      if (attempt > 100) {
           addLog("Tempo esgotado. Tente novamente.");
           setIsLoading(false);
           return;
@@ -121,7 +144,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
       try {
           // A. Checa Estado da Conexão
-          const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${targetSession}`, {
+          const stateRes = await fetchWithTimeout(`${BASE_URL}/instance/connectionState/${targetSession}`, {
               headers: { 'apikey': secretKey }
           });
 
@@ -137,45 +160,45 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   return; // Para o polling
               }
               
-              if (state === 'connecting' || state === 'close') {
-                   // Log a cada 5 tentativas (10s) para não poluir visualmente
-                   if (attempt % 5 === 0) addLog(`Aguardando... (${state})`);
+              if (attempt % 5 === 0) {
+                  addLog(`Status: ${state}`);
               }
           }
 
-          // B. Busca QR Code (SEMPRE que não tivermos um, ou a cada 5s para atualizar)
-          // Na v2 o QR code pode expirar, então é bom atualizar
-          if (!isConnected && (!qrCodeData || attempt % 3 === 0)) {
-               const qrRes = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
-                    headers: { 'apikey': secretKey }
-               });
-               
-               if (qrRes.ok) {
-                   const qrData = await qrRes.json();
-                   // Tenta encontrar o base64 em vários lugares possíveis da resposta v2
-                   let base64 = qrData.base64 || qrData.qrcode?.base64 || qrData.picture;
+          // B. Busca QR Code se ainda não temos ou para atualizar
+          if (!isConnected) {
+               // Só tenta buscar QR explicitamente se não tivermos um, ou a cada 3 tentativas para renovar
+               if (!qrCodeData || attempt % 3 === 0) {
+                   const qrRes = await fetchWithTimeout(`${BASE_URL}/instance/connect/${targetSession}`, {
+                        headers: { 'apikey': secretKey }
+                   });
                    
-                   if (base64) {
-                       // Garante prefixo data URI se não vier
-                       if (!base64.startsWith('data:')) {
-                           base64 = `data:image/png;base64,${base64}`;
-                       }
+                   if (qrRes.ok) {
+                       const qrData = await qrRes.json();
+                       let base64 = qrData.base64 || qrData.qrcode?.base64 || qrData.picture;
                        
-                       // Só atualiza se mudou (para evitar flicker)
-                       if (base64 !== qrCodeData) {
-                           setQrCodeData(base64);
-                           addLog('QR Code recebido/atualizado!');
+                       if (base64) {
+                           if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
+                           
+                           if (base64 !== qrCodeData) {
+                               setQrCodeData(base64);
+                               addLog('QR Code gerado/atualizado.');
+                           }
+                       }
+                   } else {
+                       // Se falhar (ex: 404 ou 400 porque já está conectando), loga apenas se não tivermos QR ainda
+                       if (!qrCodeData && attempt % 5 === 0) {
+                           addLog(`Busca QR: ${qrRes.status} (Tentando...)`);
                        }
                    }
                }
           }
 
       } catch (e: any) {
-          // Ignora erros de rede temporários no loop
-          console.log("Polling error:", e);
+          if (attempt % 5 === 0) addLog(`Erro rede: ${e.message}`);
       }
 
-      // Agenda próxima tentativa (2 segundos)
+      // Loop rápido de 2s
       timeoutRef.current = setTimeout(() => monitorSession(targetSession, attempt + 1), 2000);
   };
 
@@ -222,7 +245,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="bg-white p-2 rounded shadow-lg border-2 border-[#128C7E] relative group">
                         <img src={qrCodeData} alt="QR Code" className="w-64 h-64 object-contain" />
                         
-                        {/* Overlay de carregamento sutil para indicar atualização */}
                         <div className="absolute inset-0 bg-white/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                             <i className="fas fa-sync fa-spin text-gray-800 text-2xl"></i>
                         </div>

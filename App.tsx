@@ -11,7 +11,7 @@ function App() {
     {
       id: 'welcome',
       role: 'model',
-      content: 'Olá! O agente SalesBot Broker Rainha está online. Conectado ao container Docker e pronto para consultar o SQL Server.',
+      content: 'Olá! Sou o SalesBot Broker Rainha. 👑\n\nPara iniciarmos, por favor informe seu **Código de Vendedor** (ex: 101) ou seu **Nome**.',
       timestamp: new Date()
     }
   ]);
@@ -185,7 +185,7 @@ function App() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Pergunte ao bot..."
+                placeholder="Digite aqui..."
                 className="w-full bg-transparent focus:outline-none text-gray-700"
                 disabled={isLoading}
              />
@@ -238,21 +238,17 @@ function App() {
            {/* Context Hints if no data */}
            {!currentData && (
               <div className="mt-8 grid grid-cols-2 gap-4 max-w-2xl mx-auto">
-                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Qual o total de vendas hoje?")}>
-                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Total de Vendas</p>
-                    <p className="text-xs text-gray-500">"Qual o total de vendas hoje?"</p>
+                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Minha rota de hoje")}>
+                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Rota Diária</p>
+                    <p className="text-xs text-gray-500">"Qual minha rota de hoje?"</p>
                  </div>
-                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Quem foi o melhor vendedor essa semana?")}>
-                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Performance</p>
-                    <p className="text-xs text-gray-500">"Quem foi o melhor vendedor essa semana?"</p>
+                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Meus clientes positivados no mês")}>
+                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Cobertura</p>
+                    <p className="text-xs text-gray-500">"Meus clientes positivados no mês"</p>
                  </div>
-                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Vendas de Eletrônicos no Sul")}>
-                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Filtros</p>
-                    <p className="text-xs text-gray-500">"Vendas de Eletrônicos no Sul"</p>
-                 </div>
-                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Ticket médio do Carlos")}>
-                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Métricas</p>
-                    <p className="text-xs text-gray-500">"Qual o ticket médio do Carlos?"</p>
+                 <div className="bg-white p-4 rounded border border-gray-200 hover:shadow-md cursor-pointer transition group" onClick={() => setInput("Qual meu total vendido hoje?")}>
+                    <p className="text-slate-800 font-medium mb-1 group-hover:text-blue-600 transition">Minhas Vendas</p>
+                    <p className="text-xs text-gray-500">"Qual meu total vendido hoje?"</p>
                  </div>
               </div>
            )}

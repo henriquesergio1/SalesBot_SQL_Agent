@@ -147,15 +147,19 @@ if (apiKey.startsWith('gsk_')) {
     console.warn('[AI] Formato de chave desconhecido. Padrão: Groq.');
 }
 
+// Prompt Anti-Alucinação
 const SYSTEM_PROMPT = `
 Você é o "SalesBot", um assistente comercial SQL Expert. HOJE É: ${new Date().toISOString().split('T')[0]}.
 OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
 
-REGRAS:
-1. Sempre use as ferramentas (tools) para buscar dados reais. Não invente números.
-2. Seja conciso. WhatsApp requer respostas curtas e diretas.
-3. Se a ferramenta retornar dados, analise-os e responda a pergunta do usuário.
-4. Use formatação BRL (R$ 1.000,00) para valores monetários.
+PROTOCOLO DE SEGURANÇA (ANTI-ALUCINAÇÃO):
+1. USE SOMENTE DADOS RETORNADOS PELAS FERRAMENTAS.
+2. Se a ferramenta retornar "Nenhum dado encontrado" ou lista vazia, DIGA "Não encontrei informações no sistema".
+3. JAMAIS INVENTE PRODUTOS, PREÇOS OU NOMES DE CLIENTES.
+4. Se perguntarem "o que oferecer?", use 'get_client_history' para ver o que ele compra ou 'analyze_client_gap' para ver o que parou de comprar. SE AMBOS ESTIVEREM VAZIOS, DIGA QUE NÃO HÁ DADOS SUFICIENTES.
+5. Seja conciso. WhatsApp requer respostas curtas e diretas.
+6. Use formatação BRL (R$ 1.000,00) para valores monetários.
+7. IDENTIFICAÇÃO: Se o usuário iniciar a conversa informando apenas um NÚMERO ou um NOME, assuma que é a identificação do vendedor. Use a tool 'get_sales_team' para confirmar quem é. Se encontrar, cumprimente pelo nome e pergunte como pode ajudar (ex: "Quer ver sua rota ou vendas?").
 `;
 
 // Tools Schema
@@ -177,7 +181,12 @@ const toolsSchema = [
     },
     {
         name: "analyze_client_gap",
-        description: "Analisa oportunidades de produtos não comprados.",
+        description: "Analisa oportunidades (produtos comprados há 3 meses que NÃO foram comprados este mês).",
+        parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] }
+    },
+    {
+        name: "get_client_history",
+        description: "Busca o histórico REAL de compras recentes de um cliente. Use para saber o perfil de compra.",
         parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] }
     },
     {
@@ -193,11 +202,12 @@ const toolsSchema = [
     }
 ];
 
-// ... (MANTENHA SQL_QUERIES E BASE_CTE IDÊNTICOS - CÓDIGO SQL NÃO MUDA) ...
+// Queries SQL
 const SQL_QUERIES = {
     SALES_TEAM_BASE: `SELECT DISTINCT V.CODMTCEPG as 'id', V.nomepg as 'nome', S.nomepg as 'supervisor' FROM flexx10071188.dbo.ibetcplepg V LEFT JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S' WHERE V.TPOEPG IN ('V', 'S', 'M')`,
     VISITS_QUERY: `DECLARE @DataBase DATE = @targetDate; DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1); DECLARE @DataFimMes DATE = EOMONTH(@DataBase); DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1); DECLARE @FimMesAtual DATE = EOMONTH(@DataBase); ;WITH DatasMes AS ( SELECT @DataInicioMes AS DataVisita UNION ALL SELECT DATEADD(DAY, 1, DataVisita) FROM DatasMes WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes ), DiasComInfo AS ( SELECT d.DataVisita, CASE WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7' WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1' WHEN DATEPART(WEEKDAY, d.DataVisita) = 3 THEN '2' WHEN DATEPART(WEEKDAY, d.DataVisita) = 4 THEN '3' WHEN DATEPART(WEEKDAY, d.DataVisita) = 5 THEN '4' WHEN DATEPART(WEEKDAY, d.DataVisita) = 6 THEN '5' WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6' END AS DiaSemana FROM DatasMes d ), VendasMes AS ( SELECT P.CODCET, SUM(I.VALTOTITEPDD) as TotalVendido FROM flexx10071188.dbo.ibetpdd P INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual AND P.INDSTUMVTPDD = 1 AND P.CODMTCEPG = @sellerId GROUP BY P.CODCET ) SELECT DISTINCT e.CODMTCEPGVDD AS 'cod_vend', epg.NOMEPG AS 'nome_vendedor', a.CODCET AS 'cod_cliente', d.NOMRAZSCLCET AS 'razao_social', MAX(x.DataVisita) AS 'data_visita', a.DESCCOVSTCET AS 'periodicidade', CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura', ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes' FROM flexx10071188.dbo.IBETVSTCET a INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%' INNER JOIN flexx10071188.dbo.IBETCET d ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC INNER JOIN flexx10071188.dbo.IBETCPLEPG epg ON epg.CODMTCEPG = e.CODMTCEPGVDD LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET WHERE d.TPOSTUCET = 'A' AND e.CODMTCEPGVDD = @sellerId -- AND x.DataVisita = @targetDate GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido ORDER BY status_cobertura, a.CODCET OPTION (MAXRECURSION 1000);`,
-    OPPORTUNITY_QUERY: `WITH Historico AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) AND C.INDSTUMVTPDD = 1 ), CompradoMesAtual AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND MONTH(C.DATEMSDOCPDD) = MONTH(GETDATE()) AND YEAR(C.DATEMSDOCPDD) = YEAR(GETDATE()) AND C.INDSTUMVTPDD = 1 ) SELECT TOP 10 CONCAT(P.CODCATITE, ' - ', P.DESCATITE) as descricao, CONCAT(G.CODGPOITE, ' - ', G.DESGPOITE) as grupo, P.CODCATITE as cod_produto FROM Historico H LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE INNER JOIN flexx10071188.dbo.IBETGPOITE G ON P.CODGPOITE = G.CODGPOITE WHERE CM.CODCATITE IS NULL`
+    OPPORTUNITY_QUERY: `WITH Historico AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND C.DATEMSDOCPDD >= DATEADD(MONTH, -3, GETDATE()) AND C.INDSTUMVTPDD = 1 ), CompradoMesAtual AS ( SELECT DISTINCT I.CODCATITE FROM flexx10071188.dbo.ibetpdd C INNER JOIN flexx10071188.dbo.IBETITEPDD I ON C.CODPDD = I.CODPDD WHERE C.CODCET = @customerId AND MONTH(C.DATEMSDOCPDD) = MONTH(GETDATE()) AND YEAR(C.DATEMSDOCPDD) = YEAR(GETDATE()) AND C.INDSTUMVTPDD = 1 ) SELECT TOP 10 CONCAT(P.CODCATITE, ' - ', P.DESCATITE) as descricao, CONCAT(G.CODGPOITE, ' - ', G.DESGPOITE) as grupo, P.CODCATITE as cod_produto FROM Historico H LEFT JOIN CompradoMesAtual CM ON H.CODCATITE = CM.CODCATITE INNER JOIN flexx10071188.dbo.IBETCATITE P ON H.CODCATITE = P.CODCATITE INNER JOIN flexx10071188.dbo.IBETGPOITE G ON P.CODGPOITE = G.CODGPOITE WHERE CM.CODCATITE IS NULL`,
+    HISTORY_QUERY: `SELECT TOP 10 MAX(P.DATEMSDOCPDD) as ultima_compra, CAT.DESCATITE as produto, SUM(I.VALTOTITEPDD) as total_gasto, SUM(I.QTDITEPDD) as qtd_total FROM flexx10071188.dbo.ibetpdd P INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD INNER JOIN flexx10071188.dbo.IBETCATITE CAT ON I.CODCATITE = CAT.CODCATITE WHERE P.CODCET = @customerId AND P.INDSTUMVTPDD = 1 AND P.DATEMSDOCPDD >= DATEADD(MONTH, -6, GETDATE()) GROUP BY CAT.CODCATITE, CAT.DESCATITE ORDER BY ultima_compra DESC`
 };
 
 const BASE_CTE = `WITH pedidos_filtrados AS ( SELECT ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD, ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTV, ibetpdd.CODORIPDD, ibetpdd.codvec, ibetpdd.CODMTCEPG FROM flexx10071188.dbo.ibetpdd WHERE DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate AND INDSTUMVTPDD IN (1, 4) AND NUMDOCPDD <> 0 AND CODCNDPGTRVD NOT IN (9998, 9999) )`;
@@ -218,7 +228,8 @@ async function executeToolCall(name, args) {
         }
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
-            const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search`);
+            const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search OR CODCET = TRY_CAST(@search AS INT)`);
+            if (result.recordset.length === 0) return { message: "Nenhum cliente encontrado com esse nome ou código." };
             return result.recordset;
         }
         if (name === 'get_scheduled_visits') {
@@ -239,7 +250,14 @@ async function executeToolCall(name, args) {
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
+            if (result.recordset.length === 0) return { message: "Nenhuma oportunidade de Gap detectada. O cliente comprou regularmente ou não tem histórico recente." };
             return { ai_response: { oportunidades_encontradas: result.recordset.length, lista_produtos_sugeridos: result.recordset.map(p => p.descricao) }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 3 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' } };
+        }
+        if (name === 'get_client_history') {
+            request.input('customerId', sql.Int, args.customerId);
+            const result = await request.query(SQL_QUERIES.HISTORY_QUERY);
+            if (result.recordset.length === 0) return { message: "Este cliente NÃO possui compras nos últimos 6 meses. Não ofereça produtos baseados em histórico." };
+            return { ai_response: { perfil: "Compras Recentes (6 meses)", produtos_comprados: result.recordset }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 6 meses', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Histórico' } };
         }
         if (name === 'query_sales_data') {
             const now = new Date();
@@ -463,6 +481,7 @@ app.post('/api/v1/chat', async (req, res) => {
             const rows = response.data.samples;
             const isVisit = rows[0]?.['data_visita'] !== undefined || rows[0]?.['data_visita_ref'] !== undefined;
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
+            const isHist = rows[0]?.['produto'] !== undefined && rows[0]?.['total_gasto'] !== undefined;
             formattedData = {
                 totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
@@ -470,7 +489,7 @@ app.post('/api/v1/chat', async (req, res) => {
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],
-                recentTransactions: isVisit || isOpp ? [] : rows.map((r, i) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
+                recentTransactions: isVisit || isOpp || isHist ? [] : rows.map((r, i) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
                 visits: isVisit ? rows : [],
                 opportunities: isOpp ? rows : [],
                 debugMeta: response.data.debugMeta 

@@ -609,12 +609,14 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const instance = body.instance || 'unknown';
     const eventType = body.event; 
 
-    let msg, sender;
+    let msg, sender, isFromMe = false;
 
     try {
         const data = body.data; 
         if (data && (eventType === 'messages.upsert' || data.key)) {
              sender = data.key?.remoteJid;
+             isFromMe = data.key?.fromMe;
+             
              // Tenta extrair mensagem de vários lugares possíveis
              const content = data.message;
              if (content) {
@@ -626,7 +628,7 @@ app.post('/api/v1/whatsapp/webhook', async (req, res) => {
         }
     } catch(e) { console.log("Webhook parse fail", e); }
 
-    if (msg && sender && !sender.includes('@g.us') && !body.key?.fromMe) {
+    if (msg && sender && !sender.includes('@g.us') && !isFromMe) {
         console.log(`[Webhook v2] Instance: ${instance} | Sender: ${sender} | Msg: ${msg.substring(0, 15)}`);
         
         runChatAgent(msg).then(resp => {

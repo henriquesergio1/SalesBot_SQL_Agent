@@ -11,11 +11,18 @@ interface LogEntry {
     msg: string;
 }
 
-// Gera ID aleatório para garantir sessão limpa
-const generateSessionId = () => `bot_${Math.floor(Math.random() * 10000)}`;
+// Recupera ou cria ID persistente para não flodar a API com sessões novas
+const getPersistedSessionId = () => {
+    let saved = localStorage.getItem('salesbot_session_id');
+    if (!saved) {
+        saved = `bot_${Math.floor(Math.random() * 10000)}`;
+        localStorage.setItem('salesbot_session_id', saved);
+    }
+    return saved;
+};
 
 export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onClose }) => {
-  const [sessionName, setSessionName] = useState(generateSessionId()); 
+  const [sessionName, setSessionName] = useState(getPersistedSessionId()); 
   const [secretKey] = useState('minha-senha-secreta-api');
   
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
@@ -32,7 +39,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   useEffect(() => {
     isMountedRef.current = true;
     if (isOpen) {
-        setSessionName(generateSessionId());
+        // Não reseta a sessão toda vez, usa a persistente
         setQrCodeData(null);
         setStatusLog([{ time: getCurrentTime(), msg: 'Sistema pronto v2.2.2' }]);
         setIsConnected(false);
@@ -56,16 +63,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       }
   };
 
-  // Helper para fetch com timeout
-  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 5000) => {
+  // Helper para fetch com timeout ajustável
+  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000) => {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeout);
       try {
           const response = await fetch(url, { ...options, signal: controller.signal });
           clearTimeout(id);
           return response;
-      } catch (error) {
+      } catch (error: any) {
           clearTimeout(id);
+          if (error.name === 'AbortError') {
+              throw new Error('O servidor demorou muito para responder (Timeout).');
+          }
           throw error;
       }
   };
@@ -76,12 +86,12 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setQrCodeData(null);
     setIsConnected(false);
     
-    const newSession = generateSessionId();
-    setSessionName(newSession);
+    // Usa a sessão persistente
+    const currentSession = sessionName;
 
     try {
-        // 1. CRIAÇÃO DA INSTÂNCIA (Com qrcode: true para tentar pegar de imediato)
-        addLog(`1. Criando sessão (${newSession})...`);
+        // 1. CRIAÇÃO DA INSTÂNCIA (Timeout longo de 60s para evitar erro de signal aborted)
+        addLog(`1. Criando sessão (${currentSession})...`);
         const createUrl = `${BASE_URL}/instance/create`;
         
         const createRes = await fetchWithTimeout(createUrl, {
@@ -91,19 +101,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                 'apikey': secretKey 
             },
             body: JSON.stringify({ 
-                instanceName: newSession,
-                qrcode: true, // MUDANÇA: True para forçar geração imediata
+                instanceName: currentSession,
+                qrcode: true, // Força geração imediata
                 integration: "WHATSAPP-BAILEYS"
             })
-        });
+        }, 60000); // 60 segundos de timeout
 
         if (!createRes.ok) {
             const err = await createRes.json();
-            if (err.error && (err.error.includes('already exists') || err.message?.includes('already exists'))) {
-                addLog('Sessão restaurada.');
+            if (err.error?.includes('already exists') || err.instance?.status === 'already_exists') {
+                addLog('Sessão já existe. Conectando...');
             } else {
                 console.error(err);
-                addLog(`Erro criação: ${err.message || createRes.statusText}`);
+                addLog(`Info: ${err.message || createRes.statusText}`);
             }
         } else {
              const data = await createRes.json();
@@ -119,15 +129,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
              }
         }
 
-        // Aguarda propagação
-        await new Promise(r => setTimeout(r, 1000));
-
         // 2. INICIAR MONITORAMENTO
-        monitorSession(newSession, 1);
+        // Pequeno delay para garantir que o servidor processou
+        await new Promise(r => setTimeout(r, 1500));
+        monitorSession(currentSession, 1);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO CRÍTICO: ${error.message}`);
+        addLog(`ERRO: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -135,9 +144,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const monitorSession = async (targetSession: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
-      // Limite de tentativas estendido
-      if (attempt > 100) {
-          addLog("Tempo esgotado. Tente novamente.");
+      if (attempt > 60) {
+          addLog("Tempo limite de conexão excedido.");
           setIsLoading(false);
           return;
       }
@@ -146,7 +154,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           // A. Checa Estado da Conexão
           const stateRes = await fetchWithTimeout(`${BASE_URL}/instance/connectionState/${targetSession}`, {
               headers: { 'apikey': secretKey }
-          });
+          }, 10000);
 
           if (stateRes.ok) {
               const data = await stateRes.json();
@@ -167,11 +175,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
           // B. Busca QR Code se ainda não temos ou para atualizar
           if (!isConnected) {
-               // Só tenta buscar QR explicitamente se não tivermos um, ou a cada 3 tentativas para renovar
+               // Busca QR Code a cada iteração se não tivermos imagem, ou a cada 5s para renovar
                if (!qrCodeData || attempt % 3 === 0) {
                    const qrRes = await fetchWithTimeout(`${BASE_URL}/instance/connect/${targetSession}`, {
                         headers: { 'apikey': secretKey }
-                   });
+                   }, 10000);
                    
                    if (qrRes.ok) {
                        const qrData = await qrRes.json();
@@ -179,26 +187,19 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                        
                        if (base64) {
                            if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
-                           
-                           if (base64 !== qrCodeData) {
-                               setQrCodeData(base64);
-                               addLog('QR Code gerado/atualizado.');
-                           }
-                       }
-                   } else {
-                       // Se falhar (ex: 404 ou 400 porque já está conectando), loga apenas se não tivermos QR ainda
-                       if (!qrCodeData && attempt % 5 === 0) {
-                           addLog(`Busca QR: ${qrRes.status} (Tentando...)`);
+                           setQrCodeData(base64);
+                           if (attempt % 5 === 0) addLog('QR Code atualizado.');
                        }
                    }
                }
           }
 
       } catch (e: any) {
-          if (attempt % 5 === 0) addLog(`Erro rede: ${e.message}`);
+          // Ignora erros de rede temporários no polling
+          if (attempt % 5 === 0) console.warn("Polling error:", e.message);
       }
 
-      // Loop rápido de 2s
+      // Loop de 2s
       timeoutRef.current = setTimeout(() => monitorSession(targetSession, attempt + 1), 2000);
   };
 
@@ -281,7 +282,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         }`}
                     >
                         {isLoading ? (
-                            <><i className="fas fa-circle-notch fa-spin"></i> Aguardando API...</>
+                            <><i className="fas fa-circle-notch fa-spin"></i> Aguardando API (até 1min)...</>
                         ) : (
                             <><i className="fas fa-magic"></i> Gerar Novo QR Code</>
                         )}

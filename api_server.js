@@ -3,7 +3,7 @@ import express from 'express';
 import sql from 'mssql';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
@@ -38,10 +38,14 @@ const startWhatsApp = async () => {
         sock = makeWASocket({
             auth: state,
             printQRInTerminal: true,
-            logger: pino({ level: 'silent' }), // Logs limpos
-            browser: ['SalesBot', 'Chrome', '1.0.0'], // Identificação para o WPP
+            logger: pino({ level: 'silent' }), 
+            // 1. HUMANIZAÇÃO: Identificação como navegador Desktop padrão
+            browser: ["Ubuntu", "Chrome", "20.0.04"], 
             connectTimeoutMs: 60000,
-            syncFullHistory: false
+            syncFullHistory: false,
+            // 2. HUMANIZAÇÃO: Evita timeouts agressivos
+            keepAliveIntervalMs: 10000,
+            emitOwnEvents: false,
         });
 
         sock.ev.on('connection.update', async (update) => {
@@ -90,16 +94,33 @@ const startWhatsApp = async () => {
                     const remoteJid = msg.key.remoteJid;
                     const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
-                    if (text && remoteJid && !remoteJid.includes('@g.us')) {
+                    if (text && remoteJid && !remoteJid.includes('@g.us')) { // Ignora grupos por segurança
                         console.log(`[Baileys] Msg de ${remoteJid}: ${text}`);
                         
-                        // Processa com IA
                         try {
+                            // 3. HUMANIZAÇÃO: Marcar como lido visualmente
+                            await sock.readMessages([msg.key]);
+
+                            // 4. HUMANIZAÇÃO: Simular "Digitando..."
+                            await sock.sendPresenceUpdate('composing', remoteJid);
+
+                            // 5. HUMANIZAÇÃO: Delay aleatório para simular tempo de leitura/pensamento (2s a 5s)
+                            const humanDelay = Math.floor(Math.random() * 3000) + 2000;
+                            await delay(humanDelay);
+
+                            // Processa com IA
                             const response = await runChatAgent(text);
+
+                            // Pausa extra para simular digitação da resposta se for longa
+                            if (response.text.length > 100) await delay(1000);
+
                             await sock.sendMessage(remoteJid, { text: response.text });
+                            
+                            // Para de "digitar"
+                            await sock.sendPresenceUpdate('paused', remoteJid);
+
                         } catch (err) {
                             console.error('[Baileys] Erro processamento IA:', err);
-                            // Opcional: Avisar erro
                         }
                     }
                 }

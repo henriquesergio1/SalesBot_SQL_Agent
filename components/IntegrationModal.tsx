@@ -29,7 +29,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     if (isOpen) {
         setSessionName(generateSessionId());
         setQrCodeData(null);
-        setStatusLog(['Sistema pronto.']);
+        setStatusLog(['Sistema pronto v2.3.6.']);
         setIsConnected(false);
     }
     return () => {
@@ -57,36 +57,42 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setSessionName(newSession);
 
     try {
-        // 1. CRIAÇÃO DA INSTÂNCIA (v1.6.2)
+        // 1. CRIAÇÃO DA INSTÂNCIA
         addLog(`1. Criando sessão (${newSession})...`);
         const createUrl = `${BASE_URL}/instance/create`;
         
+        // Na v2 enviamos qrcode: false aqui para buscar depois via /connect
         const createRes = await fetch(createUrl, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
                 'apikey': secretKey 
             },
-            body: JSON.stringify({ instanceName: newSession })
+            body: JSON.stringify({ 
+                instanceName: newSession,
+                qrcode: false,
+                integration: "WHATSAPP-BAILEYS"
+            })
         });
 
         if (!createRes.ok) {
             const err = await createRes.json();
             // Se já existe, tentamos conectar nela
-            if (err.message && err.message.includes('already exists')) {
-                addLog('Sessão já existe. Conectando...');
+            if (err.error && (err.error.includes('already exists') || err.message?.includes('already exists'))) {
+                addLog('Sessão restaurada.');
             } else {
+                console.error(err);
                 throw new Error(err.message || 'Erro ao criar instância');
             }
         } else {
-             addLog('Instância criada com sucesso.');
+             addLog('Instância configurada.');
         }
 
-        // Delay curto para garantir propagação
-        await new Promise(r => setTimeout(r, 1000));
+        // Delay curto para garantir propagação no Redis/Postgres
+        await new Promise(r => setTimeout(r, 1500));
 
         // 2. SOLICITAR CONEXÃO / QR CODE
-        addLog('2. Solicitando QR Code...');
+        addLog('2. Buscando QR Code...');
         const connectUrl = `${BASE_URL}/instance/connect/${newSession}`;
         const connectRes = await fetch(connectUrl, {
              headers: { 'apikey': secretKey }
@@ -94,11 +100,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
         if (connectRes.ok) {
             const data = await connectRes.json();
-            if (data.base64) {
-                setQrCodeData(data.base64);
+            // v2 pode retornar { base64: "..." } ou { qrcode: { base64: "..." } } dependendo do endpoint exato
+            const base64 = data.base64 || data.qrcode?.base64;
+            
+            if (base64) {
+                setQrCodeData(base64);
                 addLog('QR Code recebido!');
             } else {
-                 addLog('QR Code não retornado imediatamente.');
+                 addLog('Aguardando geração do QR...');
             }
         }
 
@@ -130,7 +139,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
           if (stateRes.ok) {
               const data = await stateRes.json();
-              const state = data.instance?.state || 'unknown';
+              const state = data.instance?.state || data.state || 'unknown';
 
               if (state === 'open') {
                   setIsConnected(true);
@@ -141,16 +150,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               }
 
               if (state === 'connecting' || state === 'close') {
-                  if (attempt % 3 === 0) addLog(`Status: ${state}... aguardando leitura.`);
+                  if (attempt % 5 === 0) addLog(`Aguardando leitura... (${attempt})`);
                   
-                  // Se não temos QR Code ainda, tenta buscar novamente
-                  if (!qrCodeData && attempt % 5 === 0) {
+                  // Se não temos QR Code ainda, tenta buscar novamente a cada 3s
+                  if (!qrCodeData && attempt % 3 === 0) {
                        const qrRes = await fetch(`${BASE_URL}/instance/connect/${targetSession}`, {
                             headers: { 'apikey': secretKey }
                        });
                        const qrData = await qrRes.json();
-                       if (qrData.base64) {
-                           setQrCodeData(qrData.base64);
+                       const base64 = qrData.base64 || qrData.qrcode?.base64;
+                       if (base64) {
+                           setQrCodeData(base64);
                            addLog('QR Code atualizado.');
                        }
                   }
@@ -172,7 +182,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         
         <div className="bg-[#075E54] p-4 flex justify-between items-center">
             <h2 className="text-white font-bold flex items-center gap-2">
-                <i className="fab fa-whatsapp"></i> Nova Conexão
+                <i className="fab fa-whatsapp"></i> Nova Conexão v2
             </h2>
             <button onClick={onClose} className="text-white/70 hover:text-white">
                 <i className="fas fa-times text-xl"></i>
@@ -226,8 +236,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         </div>
                         <h3 className="font-bold text-gray-800 text-lg">Conectar SalesBot</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2 leading-relaxed">
-                            O sistema irá gerar uma nova sessão v1.6.2. 
-                            <br/>Tenha seu celular em mãos.
+                            O sistema irá configurar a API v2.3.6 e gerar o QR Code.
                         </p>
                     </div>
 

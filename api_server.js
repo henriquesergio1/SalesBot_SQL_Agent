@@ -602,50 +602,59 @@ app.post('/api/v1/chat', async (req, res) => {
     }
 });
 
-// WEBHOOK UPDATE FOR EVOLUTION V1.6.2
+// WEBHOOK UPDATE FOR EVOLUTION V2
 app.post('/api/v1/whatsapp/webhook', async (req, res) => {
     const body = req.body;
     
-    // v1: body = { type: '...', instance: '...', data: { key: ..., message: ... } }
-    const instance = body.instance || 'unknown_instance';
-    const type = body.type; // 'MESSAGE_UPSERT', etc.
+    // Na v2 o payload costuma vir dentro de "data"
+    // Estrutura: { instance: "...", data: { key: { remoteJid: "..." }, message: {...} }, ... }
+    
+    const instance = body.instance || 'unknown';
+    const eventType = body.event; // 'messages.upsert'
 
     let msg, sender;
 
     try {
-        const data = body.data;
-        if (data && (type === 'MESSAGE_UPSERT' || data.message)) {
+        const data = body.data; 
+        if (data && (eventType === 'messages.upsert' || data.key)) {
              sender = data.key?.remoteJid;
              msg = data.message?.conversation || 
                    data.message?.extendedTextMessage?.text;
         }
     } catch(e) { console.log("Webhook parse fail", e); }
 
-    console.log(`[Webhook v1] Instance: ${instance} | Sender: ${sender} | Msg: ${msg ? msg.substring(0, 15) : 'MEDIA/SYSTEM'}`);
-
-    if (msg && sender && !sender.includes('@g.us')) {
+    if (msg && sender && !sender.includes('@g.us') && !body.key?.fromMe) {
+        console.log(`[Webhook v2] Instance: ${instance} | Sender: ${sender} | Msg: ${msg.substring(0, 15)}`);
+        
         runChatAgent(msg).then(resp => {
             sendWhatsappMessage(sender, resp.text, instance);
-        }).catch(err => sendWhatsappMessage(sender, `Erro: ${err.message}`, instance));
+        }).catch(err => {
+            console.error(err);
+            sendWhatsappMessage(sender, `Erro: ${err.message}`, instance);
+        });
     }
+    
+    // Importante retornar 200 rápido
     res.json({ status: 'ok' });
 });
 
-// SEND MESSAGE UPDATE FOR EVOLUTION V1.6.2
+// SEND MESSAGE UPDATE FOR EVOLUTION V2
 async function sendWhatsappMessage(to, text, session) {
     const gatewayUrl = process.env.GATEWAY_URL || 'http://whatsapp-gateway:8080'; 
     const secret = process.env.AUTHENTICATION_API_KEY || 'minha-senha-secreta-api';
     const number = to.replace('@s.whatsapp.net', '');
     
     try {
-        // v1 Endpoint: /message/sendText/{instance}
+        // v2 Endpoint: /message/sendText/{instance}
         const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify({ 
                 number: number, 
                 text: text, 
-                options: { delay: 1200 }
+                // v2 options
+                delay: 1200,
+                linkPreview: false
             })
         });
         
@@ -658,4 +667,4 @@ async function sendWhatsappMessage(to, text, session) {
     } catch (e) { console.error("WPP Send Error", e); }
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V1.6 Compatible running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V2 Compatible running on ${PORT}`));

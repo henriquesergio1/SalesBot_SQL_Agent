@@ -10,8 +10,8 @@ RUN npm pkg set type="module"
 # Disable SSL strictness for stability
 RUN npm config set strict-ssl false
 
-# Install dependencies including Baileys for native WhatsApp
-RUN npm install express mssql cors @google/genai @whiskeysockets/baileys qrcode pino --save
+# Install dependencies: Express, MSSQL, Baileys (WhatsApp), Groq AND Google GenAI
+RUN npm install express mssql cors groq-sdk @google/genai @whiskeysockets/baileys qrcode pino --save
 
 COPY api_server.js .
 

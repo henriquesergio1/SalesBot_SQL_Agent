@@ -77,7 +77,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   addLog('Instância já está conectada e operante.');
               } else {
                   addLog(`Status atual: ${state || 'Desconhecido'}`);
-                  monitorSession(sessionName, 1);
+                  // Se não estiver conectado, força uma nova conexão limpa
+                  setIsConnected(false);
               }
           } else {
               addLog('Instância não encontrada na API.');
@@ -108,16 +109,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             localStorage.removeItem('salesbot_session_id');
         }
 
-        addLog(`Criando nova instância: ${newSessionId}`);
+        addLog(`1. Criando instância: ${newSessionId}`);
         setCurrentSessionName(newSessionId);
         localStorage.setItem('salesbot_session_id', newSessionId);
 
+        // PASSO 1: CRIAR APENAS (QRCODE FALSE para evitar loop)
         const createRes = await fetch(`${EVOLUTION_URL}/instance/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secretKey },
             body: JSON.stringify({ 
                 instanceName: newSessionId,
-                qrcode: true, // Pede QR na criação, mas se não vier, pegamos via webhook
+                qrcode: false, // IMPORTANTE: Não pedir QR na criação
                 integration: "WHATSAPP-BAILEYS",
                 rejectUnauthorized: false
             })
@@ -127,16 +129,27 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             throw new Error('Falha ao criar instância');
         }
 
-        const createData = await createRes.json();
+        addLog('2. Instância criada. Iniciando conexão...');
         
-        // Se vier direto na criação, ótimo
-        if (createData.qrcode?.base64 || createData.base64) {
-            renderQr(createData.qrcode?.base64 || createData.base64);
-            setIsLoading(false);
-            monitorSession(newSessionId, 1);
+        // Pequeno delay para garantir que o banco registrou a instância
+        await new Promise(r => setTimeout(r, 1000));
+
+        // PASSO 2: CONECTAR EXPLICITAMENTE
+        const connectRes = await fetch(`${EVOLUTION_URL}/instance/connect/${newSessionId}`, {
+             headers: { 'apikey': secretKey }
+        });
+
+        if (connectRes.ok) {
+            const connectData = await connectRes.json();
+            // Às vezes o connect já retorna o QR
+            if (connectData.qrcode?.base64 || connectData.base64) {
+                 renderQr(connectData.qrcode?.base64 || connectData.base64);
+            } else {
+                 addLog('3. Solicitado. Aguardando QR Code via Webhook...');
+                 monitorSession(newSessionId, 1);
+            }
         } else {
-            addLog('Instância criada. Aguardando QR Code via Webhook...');
-            // Inicia monitoramento (que busca o QR via proxy)
+            addLog('Erro ao iniciar conexão. Tentando monitorar mesmo assim...');
             monitorSession(newSessionId, 1);
         }
 
@@ -149,7 +162,6 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
 
   const fetchQrCodeFromBackend = async (sessionId: string) => {
       try {
-          // Busca do NOSSO backend, que tem o cache do webhook
           const res = await fetch(`${BACKEND_URL}/qrcode/${sessionId}`);
           if (res.ok) {
               const data = await res.json();
@@ -174,7 +186,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!isMountedRef.current) return;
       
       try {
-          // 1. Checa Status na Evolution
+          // Tenta buscar o QR code no cache do backend (Webhook)
+          if (!qrCodeData) {
+              const found = await fetchQrCodeFromBackend(sessionId);
+              if (found) return; // Se achou, para de monitorar agressivamente
+          }
+
+          // Checa estado
           const stateRes = await fetch(`${EVOLUTION_URL}/instance/connectionState/${sessionId}`, {
               headers: { 'apikey': secretKey }
           });
@@ -188,23 +206,25 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   setQrCodeData(null);
                   addLog('CONEXÃO ESTABELECIDA! PRONTO.');
                   setIsLoading(false);
-                  return; // SUCESSO
+                  return; 
               }
               
-              if (state === 'connecting') {
-                 if (attempt % 2 === 0) addLog(`Status: ${state}...`);
-                 
-                 // Se ainda não temos QR, buscamos no cache do Backend
-                 if (!qrCodeData) {
-                     await fetchQrCodeFromBackend(sessionId);
-                 }
+              if (attempt % 5 === 0) {
+                  addLog(`Status: ${state} (Aguarde...)`);
               }
           }
 
       } catch (e) { /* ignore */ }
 
-      // Loop a cada 3 segundos
-      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 3000);
+      // Se passou de 60 segundos (30 tentativas * 2s), para
+      if (attempt > 30) {
+          addLog('Tempo limite excedido. Tente novamente.');
+          setIsLoading(false);
+          return;
+      }
+
+      // Loop a cada 2 segundos
+      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2000);
   };
 
   if (!isOpen) return null;
@@ -266,7 +286,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="text-center mb-6">
                         <h3 className="font-bold text-gray-800 text-lg">Gerar Nova Conexão</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2">
-                           O sistema irá preparar uma nova sessão limpa.
+                           O sistema irá resetar a sessão e solicitar um novo QR Code limpo.
                         </p>
                     </div>
 
@@ -278,7 +298,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         }`}
                     >
                         {isLoading ? (
-                            <><i className="fas fa-cog fa-spin"></i> Aguardando QR...</>
+                            <><i className="fas fa-cog fa-spin"></i> Preparando...</>
                         ) : (
                             <><i className="fas fa-qrcode"></i> Iniciar Sessão</>
                         )}

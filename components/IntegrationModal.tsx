@@ -19,6 +19,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [currentSessionName, setCurrentSessionName] = useState<string>('');
+  const [showManualFetch, setShowManualFetch] = useState(false);
   
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(false);
@@ -34,6 +35,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     
     if (isOpen) {
         setQrCodeData(null);
+        setShowManualFetch(false);
         setStatusLog([{ time: getCurrentTime(), msg: 'Painel de Conexão Aberto' }]);
         
         if (savedSession) {
@@ -52,7 +54,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
   const getCurrentTime = () => new Date().toLocaleTimeString().split(' ')[0];
 
   const addLog = (msg: string) => {
-      setStatusLog(prev => [...prev.slice(-9), { time: getCurrentTime(), msg }]);
+      setStatusLog(prev => [...prev.slice(-14), { time: getCurrentTime(), msg }]);
   };
 
   const stopPolling = () => {
@@ -76,12 +78,11 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   addLog('Instância já está conectada e operante.');
               } else {
                   addLog(`Status atual: ${state || 'Desconhecido'}`);
-                  // Se não estiver open, inicia monitoramento para tentar recuperar
                   monitorSession(sessionName, 1);
               }
           } else {
               addLog('Instância não encontrada na API.');
-              localStorage.removeItem('salesbot_session_id'); // Limpa se não existir na API
+              localStorage.removeItem('salesbot_session_id');
               setCurrentSessionName('');
           }
       } catch (e) {
@@ -94,27 +95,22 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     setIsLoading(true);
     setQrCodeData(null);
     setIsConnected(false);
+    setShowManualFetch(false);
     
-    // Gera um ID totalmente novo para evitar conflito com "zumbis" no banco
     const newSessionId = `salesbot_v4_${Math.floor(Math.random() * 10000)}`;
     const oldSessionId = localStorage.getItem('salesbot_session_id');
 
     try {
-        // 1. LIMPEZA (Se existir antiga)
         if (oldSessionId) {
             addLog(`Limpando sessão antiga...`);
             try {
-                // Tenta logout e delete, mas não bloqueia se falhar
                 await fetch(`${BASE_URL}/instance/logout/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
                 await fetch(`${BASE_URL}/instance/delete/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
             } catch (e) { /* ignore */ }
             localStorage.removeItem('salesbot_session_id');
         }
 
-        // 2. CRIAÇÃO NOVA
         addLog(`Criando nova instância: ${newSessionId}`);
-        
-        // Define o novo ID antes de criar
         setCurrentSessionName(newSessionId);
         localStorage.setItem('salesbot_session_id', newSessionId);
 
@@ -135,36 +131,68 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         }
 
         const createData = await createRes.json();
-        addLog('Instância criada. Aguardando inicialização...');
+        // DEBUG CRÍTICO: Mostra se veio chaves de QR Code
+        const keys = Object.keys(createData).join(',');
+        addLog(`Resp Criação OK. Chaves: [${keys}]`);
 
-        // Se o QR vier na criação, mostra
         if (createData.qrcode?.base64 || createData.base64) {
             renderQr(createData.qrcode?.base64 || createData.base64);
+            setIsLoading(false);
+            monitorSession(newSessionId, 1);
+        } else {
+            // Se não veio QR na criação, solicitamos conexão explicitamente UMA VEZ
+            addLog('Criação sem imagem. Solicitando connect...');
+            setTimeout(async () => {
+                 await fetchQrCodeManual(newSessionId);
+                 setIsLoading(false);
+                 monitorSession(newSessionId, 1);
+            }, 1000);
         }
-
-        // 3. MONITORAMENTO INTELIGENTE
-        // Delay inicial de 2s para dar tempo do container processar
-        setTimeout(() => monitorSession(newSessionId, 1), 2000);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO: ${error.message}`);
+        addLog(`ERRO CRÍTICO: ${error.message}`);
         setIsLoading(false);
     }
+  };
+
+  const fetchQrCodeManual = async (sessionId?: string) => {
+      const id = sessionId || currentSessionName;
+      if (!id) return;
+      
+      addLog('Buscando QR Code manualmente...');
+      try {
+          const res = await fetch(`${BASE_URL}/instance/connect/${id}`, {
+              headers: { 'apikey': secretKey }
+          });
+          const data = await res.json();
+          addLog(`Resp Connect: ${JSON.stringify(data).substring(0, 60)}...`);
+          
+          if (data.base64 || data.qrcode?.base64) {
+              renderQr(data.base64 || data.qrcode?.base64);
+          } else if (data.instance?.state === 'open') {
+              setIsConnected(true);
+              addLog('Conectado durante a busca!');
+          } else {
+              addLog('API ainda não retornou imagem. Aguardando...');
+          }
+      } catch (e: any) {
+          addLog(`Erro ao buscar QR: ${e.message}`);
+      }
   };
 
   const renderQr = (base64: string) => {
       if (!base64) return;
       if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
       setQrCodeData(base64);
-      addLog('QR Code Gerado! Escaneie agora.');
+      addLog('QR Code Recebido! Renderizando...');
+      setIsLoading(false);
   };
 
   const monitorSession = async (sessionId: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
       try {
-          // 1. Verifica Estado da Conexão
           const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${sessionId}`, {
               headers: { 'apikey': secretKey }
           });
@@ -176,49 +204,31 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
               if (state === 'open') {
                   setIsConnected(true);
                   setQrCodeData(null);
-                  addLog('CONECTADO COM SUCESSO!');
+                  addLog('CONEXÃO ESTABELECIDA! PRONTO.');
                   setIsLoading(false);
-                  return; // Para o loop
+                  return; // SUCESSO - PARA O LOOP
               }
               
               if (state === 'connecting') {
-                 // Se já temos QR Code na tela, apenas aguardamos
-                 if (qrCodeData) {
-                     addLog(`Aguardando leitura... (status: ${state})`);
-                 } else {
-                     addLog(`Iniciando... (status: ${state})`);
-                 }
+                 // NÃO CHAMAMOS CONNECT AQUI PARA NÃO REINICIAR O PROCESSO
+                 if (attempt % 3 === 0) addLog(`Status: ${state} (Aguarde...)`);
+              }
+
+              if (state === 'close' || state === 'refused') {
+                  addLog(`Conexão fechada/recusada. Tentando reconectar...`);
+                  await fetchQrCodeManual(sessionId);
               }
           }
 
-          // 2. Lógica de Recuperação de QR Code
-          // SÓ tentamos buscar o QR Code se:
-          // a) Não estamos conectados
-          // b) Não temos QR Code na tela AINDA
-          // c) O estado NÃO é 'open'
-          // d) IMPORTANTÍSSIMO: Não spamar o endpoint 'connect' se o estado for 'connecting', pois isso reinicia o processo.
-          //    Vamos chamar 'connect' apenas se passou muito tempo ou se é a primeira tentativa real pós-criação falha.
-          
-          const shouldFetchQr = !isConnected && !qrCodeData && (attempt === 1 || attempt % 5 === 0);
-
-          if (shouldFetchQr) {
-               addLog('Solicitando QR Code ao servidor...');
-               const qrRes = await fetch(`${BASE_URL}/instance/connect/${sessionId}`, {
-                    headers: { 'apikey': secretKey }
-               });
-               if (qrRes.ok) {
-                   const qrData = await qrRes.json();
-                   const code = qrData.base64 || qrData.qrcode?.base64;
-                   if (code) renderQr(code);
-               }
+          // Se passar muito tempo (ex: 20s = 10 tentativas de 2s) sem QR code, mostra botão manual
+          if (!isConnected && !qrCodeData && attempt > 10) {
+              setShowManualFetch(true);
           }
 
-      } catch (e) {
-          // ignore network glitches
-      }
+      } catch (e) { /* ignore */ }
 
-      // Loop a cada 3 segundos (menos agressivo para não travar a API)
-      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 3000);
+      // Loop a cada 2 segundos
+      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2000);
   };
 
   if (!isOpen) return null;
@@ -236,10 +246,10 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
             </button>
         </div>
 
-        <div className="p-6 flex flex-col items-center min-h-[400px]">
+        <div className="p-6 flex flex-col items-center min-h-[450px]">
             
             {/* Status Log */}
-            <div className="w-full bg-slate-900 p-3 rounded mb-4 text-[11px] font-mono text-green-400 border border-slate-700 h-32 overflow-y-auto shadow-inner">
+            <div className="w-full bg-slate-900 p-3 rounded mb-4 text-[10px] font-mono text-green-400 border border-slate-700 h-40 overflow-y-auto shadow-inner">
                 {statusLog.map((log, i) => (
                     <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0 break-all">
                         <span className="text-gray-500 mr-2">{log.time}</span>
@@ -254,7 +264,7 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         <i className="fas fa-check"></i>
                     </div>
                     <h3 className="text-xl font-bold text-gray-800">Bot Conectado!</h3>
-                    <p className="text-gray-500 text-sm mt-2">Sessão: <span className="font-mono bg-gray-100 px-1 rounded">{currentSessionName}</span>.</p>
+                    <p className="text-gray-500 text-sm mt-2">Sessão: <span className="font-mono bg-gray-100 px-1 rounded">{currentSessionName}</span></p>
                     <button 
                         onClick={handleForceNewConnection}
                         className="mt-6 text-xs text-red-500 hover:text-red-700 underline"
@@ -273,14 +283,13 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                     <div className="mt-4 flex items-center gap-2 text-xs text-blue-600 font-semibold animate-pulse">
                         <i className="fas fa-circle-notch fa-spin"></i> Aguardando leitura...
                     </div>
-                    <p className="text-xs text-gray-400 mt-2">ID: {currentSessionName}</p>
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center w-full flex-1">
                     <div className="text-center mb-6">
                         <h3 className="font-bold text-gray-800 text-lg">Gerar Nova Conexão</h3>
                         <p className="text-sm text-gray-500 max-w-[280px] mx-auto mt-2">
-                           Clique para criar uma nova sessão limpa e gerar o QR Code.
+                           Ao clicar, aguarde até 30 segundos para a API iniciar o navegador.
                         </p>
                     </div>
 
@@ -294,9 +303,18 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                         {isLoading ? (
                             <><i className="fas fa-cog fa-spin"></i> Processando...</>
                         ) : (
-                            <><i className="fas fa-qrcode"></i> Criar Nova Sessão</>
+                            <><i className="fas fa-qrcode"></i> Iniciar Sessão</>
                         )}
                     </button>
+
+                    {showManualFetch && !isLoading && (
+                         <button 
+                            onClick={() => fetchQrCodeManual()}
+                            className="mt-4 text-blue-600 underline text-sm"
+                         >
+                            O QR Code não apareceu? Clique aqui.
+                         </button>
+                    )}
                 </div>
             )}
         </div>

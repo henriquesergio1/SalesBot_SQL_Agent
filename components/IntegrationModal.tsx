@@ -70,11 +70,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           });
           if (res.ok) {
               const data = await res.json();
-              if (data.instance?.state === 'open' || data.state === 'open') {
+              const state = data.instance?.state || data.state;
+              if (state === 'open') {
                   setIsConnected(true);
                   addLog('Instância já está conectada e operante.');
               } else {
-                  addLog(`Status atual: ${data.instance?.state || data.state || 'Desconhecido'}`);
+                  addLog(`Status atual: ${state || 'Desconhecido'}`);
+                  // Se não estiver open, inicia monitoramento para tentar recuperar
+                  monitorSession(sessionName, 1);
               }
           } else {
               addLog('Instância não encontrada na API.');
@@ -99,21 +102,17 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
     try {
         // 1. LIMPEZA (Se existir antiga)
         if (oldSessionId) {
-            addLog(`Limpando sessão antiga (${oldSessionId})...`);
+            addLog(`Limpando sessão antiga...`);
             try {
-                await fetch(`${BASE_URL}/instance/logout/${oldSessionId}`, {
-                     method: 'DELETE', headers: { 'apikey': secretKey }
-                });
-                await fetch(`${BASE_URL}/instance/delete/${oldSessionId}`, {
-                    method: 'DELETE',
-                    headers: { 'apikey': secretKey }
-                });
+                // Tenta logout e delete, mas não bloqueia se falhar
+                await fetch(`${BASE_URL}/instance/logout/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
+                await fetch(`${BASE_URL}/instance/delete/${oldSessionId}`, { method: 'DELETE', headers: { 'apikey': secretKey } });
             } catch (e) { /* ignore */ }
             localStorage.removeItem('salesbot_session_id');
         }
 
         // 2. CRIAÇÃO NOVA
-        addLog(`Criando nova instância limpa: ${newSessionId}`);
+        addLog(`Criando nova instância: ${newSessionId}`);
         
         // Define o novo ID antes de criar
         setCurrentSessionName(newSessionId);
@@ -136,19 +135,20 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
         }
 
         const createData = await createRes.json();
-        addLog('Instância criada. Aguardando QR...');
+        addLog('Instância criada. Aguardando inicialização...');
 
         // Se o QR vier na criação, mostra
         if (createData.qrcode?.base64 || createData.base64) {
             renderQr(createData.qrcode?.base64 || createData.base64);
         }
 
-        // 3. POLLING DE QR CODE
-        monitorSession(newSessionId, 1);
+        // 3. MONITORAMENTO INTELIGENTE
+        // Delay inicial de 2s para dar tempo do container processar
+        setTimeout(() => monitorSession(newSessionId, 1), 2000);
 
     } catch (error: any) {
         console.error(error);
-        addLog(`ERRO FATAL: ${error.message}`);
+        addLog(`ERRO: ${error.message}`);
         setIsLoading(false);
     }
   };
@@ -157,14 +157,14 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
       if (!base64) return;
       if (!base64.startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
       setQrCodeData(base64);
-      addLog('QR Code Recebido!');
+      addLog('QR Code Gerado! Escaneie agora.');
   };
 
   const monitorSession = async (sessionId: string, attempt: number) => {
       if (!isMountedRef.current) return;
       
       try {
-          // Verifica estado
+          // 1. Verifica Estado da Conexão
           const stateRes = await fetch(`${BASE_URL}/instance/connectionState/${sessionId}`, {
               headers: { 'apikey': secretKey }
           });
@@ -178,16 +178,31 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
                   setQrCodeData(null);
                   addLog('CONECTADO COM SUCESSO!');
                   setIsLoading(false);
-                  return; 
+                  return; // Para o loop
               }
               
               if (state === 'connecting') {
-                 addLog(`Tentativa ${attempt}: Conectando...`);
+                 // Se já temos QR Code na tela, apenas aguardamos
+                 if (qrCodeData) {
+                     addLog(`Aguardando leitura... (status: ${state})`);
+                 } else {
+                     addLog(`Iniciando... (status: ${state})`);
+                 }
               }
           }
 
-          // Busca QR Code explicitamente se ainda não conectado
-          if (!isConnected) {
+          // 2. Lógica de Recuperação de QR Code
+          // SÓ tentamos buscar o QR Code se:
+          // a) Não estamos conectados
+          // b) Não temos QR Code na tela AINDA
+          // c) O estado NÃO é 'open'
+          // d) IMPORTANTÍSSIMO: Não spamar o endpoint 'connect' se o estado for 'connecting', pois isso reinicia o processo.
+          //    Vamos chamar 'connect' apenas se passou muito tempo ou se é a primeira tentativa real pós-criação falha.
+          
+          const shouldFetchQr = !isConnected && !qrCodeData && (attempt === 1 || attempt % 5 === 0);
+
+          if (shouldFetchQr) {
+               addLog('Solicitando QR Code ao servidor...');
                const qrRes = await fetch(`${BASE_URL}/instance/connect/${sessionId}`, {
                     headers: { 'apikey': secretKey }
                });
@@ -202,8 +217,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
           // ignore network glitches
       }
 
-      // Tenta novamente em 2.5s
-      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 2500);
+      // Loop a cada 3 segundos (menos agressivo para não travar a API)
+      timeoutRef.current = setTimeout(() => monitorSession(sessionId, attempt + 1), 3000);
   };
 
   if (!isOpen) return null;

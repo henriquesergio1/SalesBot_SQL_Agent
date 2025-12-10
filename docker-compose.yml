@@ -53,7 +53,7 @@ services:
       - QRCODE_LIMIT=30
       # Otimização de Performance
       - WHERENOW_ENABLED=false
-      - GROUPS_IGNORE=true
+      - GROUPS_IGNORE=false
       - DATABASE_SAVE_DATA_INSTANCE=true
       - DATABASE_SAVE_DATA_NEW_MESSAGE=true
       - DATABASE_SAVE_MESSAGE_UPDATE=false
@@ -88,8 +88,8 @@ services:
       - POSTGRES_PASSWORD=evolutionpass
       - POSTGRES_DB=evolution
     volumes:
-      # NOME DO VOLUME ALTERADO PARA V4 (FINAL) PARA GARANTIR BASE LIMPA
-      - evolution_data_v4_final:/var/lib/postgresql/data
+      # NOME DO VOLUME ALTERADO PARA V5 (FIXED) PARA GARANTIR BASE LIMPA
+      - evolution_data_v5_fixed:/var/lib/postgresql/data
     command: ["postgres", "-c", "max_connections=200"]
 
   # 5. Redis for Evolution API
@@ -100,4 +100,4 @@ services:
     command: ["redis-server", "--appendonly", "no"]
 
 volumes:
-  evolution_data_v4_final:
+  evolution_data_v5_fixed:

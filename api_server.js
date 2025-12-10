@@ -646,15 +646,19 @@ async function sendWhatsappMessage(to, text, session) {
     
     try {
         // v2 Endpoint: /message/sendText/{instance}
+        // Usando formato de opções + textMessage para garantir compatibilidade
         const response = await fetch(`${gatewayUrl}/message/sendText/${session}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': secret },
             body: JSON.stringify({ 
-                number: number, 
-                text: text, 
-                // v2 options
-                delay: 1200,
-                linkPreview: false
+                number: number,
+                options: {
+                    delay: 1200,
+                    linkPreview: false
+                },
+                textMessage: {
+                    text: text
+                }
             })
         });
         

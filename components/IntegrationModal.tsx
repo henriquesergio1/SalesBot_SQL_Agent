@@ -88,8 +88,8 @@ export const IntegrationModal: React.FC<IntegrationModalProps> = ({ isOpen, onCl
              addLog('Instância configurada.');
         }
 
-        // Delay curto para garantir propagação no Redis/Postgres
-        await new Promise(r => setTimeout(r, 1500));
+        // Delay AUMENTADO para garantir propagação no Redis/Postgres (Banco recriado pode demorar)
+        await new Promise(r => setTimeout(r, 2500));
 
         // 2. SOLICITAR CONEXÃO / QR CODE
         addLog('2. Buscando QR Code...');

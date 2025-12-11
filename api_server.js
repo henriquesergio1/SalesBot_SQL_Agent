@@ -196,11 +196,11 @@ const SYSTEM_PROMPT = `
 Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${new Date().toISOString().split('T')[0]}.
 
-CRITICAL INSTRUCTIONS FOR TOOL CALLING:
-1. DO NOT output XML tags like <function>.
-2. DO NOT output plain JSON text like {"function": ...}.
-3. ALWAYS use the native "tool_calls" functionality provided by the API interface.
-4. If the user provides a customer code (e.g., 4479498), extract it as an INTEGER.
+INSTRUÇÕES CRÍTICAS (ANTI-ALUCINAÇÃO):
+1. O usuário NÃO quer ver JSON ou nomes de funções.
+2. Se você precisar de dados, chame a ferramenta usando 'tool_calls'.
+3. Se você receber dados da ferramenta, resuma-os em linguagem natural.
+4. Se você escrever o nome de uma função, certifique-se de que é um erro e tente não fazer isso.
 
 OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
 
@@ -212,7 +212,6 @@ FLUXO DE RACIOCÍNIO:
    - "Histórico", "O que ele compra" -> get_client_history
    - "Total vendido", "Minhas vendas" -> query_sales_data
 3. Execute a ferramenta e responda COM OS DADOS RETORNADOS.
-4. Se a ferramenta analyze_client_gap não retornar nada, tente get_client_history.
 
 PROTOCOLO DE SEGURANÇA:
 - NÃO INVENTE DADOS.
@@ -399,31 +398,57 @@ async function runGroqAgent(messages) {
     });
     let message = completion.choices[0].message;
     
-    // --- FALLBACK: DETECTAR ALUCINAÇÃO JSON NO TEXTO ---
+    // --- FALLBACK ROBUSTO: DETECTAR ALUCINAÇÕES DE FUNÇÃO ---
+    // O modelo pode retornar o JSON puro ou algo como "get_scheduled_visits{...}" como TEXTO.
+    // Precisamos interceptar isso e transformar em uma tool_call válida.
+
     if (!message.tool_calls && message.content) {
-        // Tenta detectar padrão {"function": "nome", "parameters": {...}}
-        const contentTrimmed = message.content.trim();
-        if (contentTrimmed.startsWith('{') && contentTrimmed.includes('"function"')) {
+        const content = message.content.trim();
+        
+        // 1. Regex para "NomeDaFuncao{...JSON...}"
+        // Captura o nome da função (grupo 1) e o JSON (grupo 2)
+        const toolNames = toolsSchema.map(t => t.name).join('|');
+        const functionRegex = new RegExp(`(${toolNames})\\s*(\\{[\\s\\S]*\\})`, 'i');
+        const match = content.match(functionRegex);
+
+        if (match) {
+            const fnName = match[1];
+            const fnArgs = match[2];
+            console.log(`[Groq] Fallback: Detectada função textual '${fnName}'. Convertendo para ToolCall.`);
+            
             try {
-                const potentialJson = JSON.parse(contentTrimmed);
+                // Tenta validar o JSON antes de usar
+                JSON.parse(fnArgs);
+                message.tool_calls = [{
+                    id: 'call_fallback_' + Date.now(),
+                    type: 'function',
+                    function: { name: fnName, arguments: fnArgs }
+                }];
+                message.content = null; // Remove o texto técnico para o usuário não ver
+            } catch (e) {
+                console.warn("[Groq] Falha ao parsear JSON do fallback (Regex):", e.message);
+            }
+        } 
+        // 2. Fallback para JSON puro {"function": "nome", ...}
+        else if (content.startsWith('{') && content.includes('"function"')) {
+             try {
+                const potentialJson = JSON.parse(content);
                 if (potentialJson.function && potentialJson.parameters) {
-                    console.log('[Groq] Detectada chamada de função via JSON text (Fallback):', potentialJson.function);
+                    console.log('[Groq] Fallback: Detectado JSON puro de função.');
                     message.tool_calls = [{
-                        id: 'call_fallback_' + Date.now(),
+                        id: 'call_fallback_json_' + Date.now(),
                         type: 'function',
                         function: {
                             name: potentialJson.function,
                             arguments: JSON.stringify(potentialJson.parameters)
                         }
                     }];
-                    message.content = null; // Limpa o texto para não retornar o JSON ao usuário
+                    message.content = null;
                 }
-            } catch (e) {
-                // Falha silenciosa no fallback, retorna o texto original
-            }
+            } catch (e) { /* ignore */ }
         }
     }
-    // ---------------------------------------------------
+    // --------------------------------------------------------
 
     let dataPayload = null;
     if (message.tool_calls) {

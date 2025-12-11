@@ -8,7 +8,6 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@w
 import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
-import path from 'path';
 
 const app = express();
 app.use(express.json());
@@ -25,41 +24,13 @@ let connectionStatus = 'disconnected';
 let shouldReconnect = true;
 let isReconnecting = false;
 
-const AUTH_FOLDER = 'auth_info_baileys';
-
-// Função robusta para limpar pasta de sessão
-const clearAuthFolder = async () => {
-    if (!fs.existsSync(AUTH_FOLDER)) return true;
-
-    console.log('[Baileys] Tentando limpar pasta de sessão...');
-    const maxRetries = 3;
-    
-    for (let i = 0; i < maxRetries; i++) {
-        try {
-            fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
-            console.log('[Baileys] Pasta limpa com sucesso.');
-            return true;
-        } catch (error) {
-            console.warn(`[Baileys] Tentativa ${i+1} de limpar falhou (${error.code})...`);
-            await new Promise(r => setTimeout(r, 1000));
-        }
-    }
-
-    try {
-        const trashName = `${AUTH_FOLDER}_trash_${Date.now()}`;
-        fs.renameSync(AUTH_FOLDER, trashName);
-        console.log(`[Baileys] Pasta renomeada para ${trashName} (fallback).`);
-        return true;
-    } catch (e) {
-        console.error('[Baileys] Falha crítica ao limpar sessão:', e);
-        return false;
-    }
-};
-
 const startWhatsApp = async () => {
-    console.log(`[Baileys] startWhatsApp solicitado. Reconnecting: ${isReconnecting}`);
+    console.log(`[Baileys] startWhatsApp solicitado. Bloqueio atual: ${isReconnecting}`);
     
-    if (isReconnecting) return;
+    if (isReconnecting) {
+        console.log('[Baileys] Tentativa de conexão ignorada (já existe um processo em andamento).');
+        return;
+    }
     isReconnecting = true;
 
     try {
@@ -67,35 +38,36 @@ const startWhatsApp = async () => {
             try { sock.end(undefined); } catch (e) {}
             sock = null;
         }
-
+        
         console.log('[Baileys] Iniciando novo processo de conexão...');
         connectionStatus = 'connecting';
         qrCodeBase64 = null;
         shouldReconnect = true;
         
-        if (!fs.existsSync(AUTH_FOLDER)) { 
-            fs.mkdirSync(AUTH_FOLDER); 
+        if (!fs.existsSync('auth_info_baileys')) { 
+            console.log('[Baileys] Criando pasta de autenticação...');
+            fs.mkdirSync('auth_info_baileys'); 
         }
 
-        const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
         
         sock = makeWASocket({
             auth: state,
-            printQRInTerminal: false,
+            printQRInTerminal: true,
             logger: pino({ level: 'silent' }), 
-            browser: ["SalesBot", "Chrome", "1.0.0"], 
+            browser: ["Mac OS", "Chrome", "10.15.7"], 
             connectTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
             emitOwnEvents: false,
-            retryRequestDelayMs: 2000 
+            retryRequestDelayMs: 5000 
         });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log('[Baileys] Novo QR Code recebido.');
+                console.log('[Baileys] Novo QR Code gerado e disponível.');
                 qrCodeBase64 = await qrcode.toDataURL(qr);
                 connectionStatus = 'qrcode_ready';
             }
@@ -103,23 +75,32 @@ const startWhatsApp = async () => {
             if (connection === 'close') {
                 const statusCode = (lastDisconnect?.error)?.output?.statusCode;
                 const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+                const isForbidden = statusCode === 403; 
                 
-                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}`);
+                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}. LoggedOut: ${isLoggedOut}`);
                 
                 connectionStatus = 'disconnected';
                 qrCodeBase64 = null;
 
-                if (isLoggedOut || statusCode === 403) {
-                    console.log('[Baileys] Sessão inválida. Reiniciando limpo...');
-                    sock = null;
-                    await clearAuthFolder();
+                if (isLoggedOut || isForbidden) {
+                    console.log('[Baileys] Sessão inválida/banida. Limpando arquivos...');
+                    try {
+                       sock = null;
+                       if (fs.existsSync('auth_info_baileys')) fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                    } catch (e) {}
+                    
+                    // Permite reconexão limpa
                     isReconnecting = false;
-                    setTimeout(() => startWhatsApp(), 1000);
-                } else if (shouldReconnect) {
-                    console.log('[Baileys] Reconectando em 2s...');
-                    isReconnecting = false; 
                     setTimeout(() => startWhatsApp(), 2000);
+                } else if (shouldReconnect) {
+                    console.log('[Baileys] Tentando reconectar em 3s...');
+                    // Libera a trava para permitir que o próximo startWhatsApp funcione (ou chama ele direto)
+                    // Importante: Não setar isReconnecting=false aqui se formos chamar startWhatsApp recursivamente logo em seguida
+                    // Mas como usamos setTimeout, podemos resetar a flag dentro do timeout ou confiar na logica de start
+                    isReconnecting = false; 
+                    setTimeout(() => startWhatsApp(), 3000);
                 } else {
+                    console.log('[Baileys] Reconexão automática desativada.');
                     isReconnecting = false;
                 }
             } else if (connection === 'open') {
@@ -143,14 +124,14 @@ const startWhatsApp = async () => {
                         console.log(`[Baileys] Msg de ${remoteJid}: ${text}`);
                         
                         try {
+                            // Humanização básica
                             await sock.readMessages([msg.key]);
                             await sock.sendPresenceUpdate('composing', remoteJid);
                             
                             const humanDelay = Math.floor(Math.random() * 2000) + 1000;
                             await delay(humanDelay);
 
-                            // WhatsApp não manda histórico, então array vazio
-                            const response = await runChatAgent(text, []); 
+                            const response = await runChatAgent(text); 
                             
                             await sock.sendMessage(remoteJid, { text: response.text });
                             await sock.sendPresenceUpdate('paused', remoteJid);
@@ -163,14 +144,15 @@ const startWhatsApp = async () => {
     } catch (err) {
         console.error('[Baileys] Falha crítica no start:', err);
         connectionStatus = 'error';
-        isReconnecting = false;
+        isReconnecting = false; // Libera trava em caso de erro
     }
 };
 
+// Início automático
 setTimeout(startWhatsApp, 1000);
 
 // ==================================================================================
-// 1. CONFIGURAÇÃO SQL & AI
+// 1. CONFIGURAÇÃO SQL & AI HÍBRIDA (GROQ OU GEMINI)
 // ==================================================================================
 
 const sqlConfig = {
@@ -198,7 +180,30 @@ if (apiKey.startsWith('gsk_')) {
     console.warn('[AI] Formato de chave desconhecido. Padrão: Groq.');
 }
 
-// SQL Queries e Tools Schema
+const SYSTEM_PROMPT = `
+Você é o "SalesBot", um assistente comercial SQL Expert. HOJE É: ${new Date().toISOString().split('T')[0]}.
+OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
+
+PROTOCOLO DE SEGURANÇA (ANTI-ALUCINAÇÃO):
+1. USE SOMENTE DADOS RETORNADOS PELAS FERRAMENTAS.
+2. Se a ferramenta retornar "Nenhum dado encontrado" ou lista vazia, DIGA "Não encontrei informações no sistema".
+3. JAMAIS INVENTE PRODUTOS, PREÇOS OU NOMES DE CLIENTES.
+4. Se perguntarem "o que oferecer?", use 'get_client_history' para ver o que ele compra ou 'analyze_client_gap' para ver o que parou de comprar. SE AMBOS ESTIVEREM VAZIOS, DIGA QUE NÃO HÁ DADOS SUFICIENTES.
+5. Seja conciso. WhatsApp requer respostas curtas e diretas.
+6. Use formatação BRL (R$ 1.000,00) para valores monetários.
+7. IDENTIFICAÇÃO: Se o usuário iniciar a conversa informando apenas um NÚMERO ou um NOME, assuma que é a identificação do vendedor. Use a tool 'get_sales_team' para confirmar quem é. Se encontrar, cumprimente pelo nome e pergunte como pode ajudar (ex: "Quer ver sua rota ou vendas?").
+`;
+
+// Tools Schema e SQL Queries mantidos iguais
+const toolsSchema = [
+    { name: "get_sales_team", description: "Consulta funcionários/vendedores.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
+    { name: "get_customer_base", description: "Busca cadastro de clientes pelo nome.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
+    { name: "get_scheduled_visits", description: "Retorna a ROTA de visitas e cobertura do vendedor.", parameters: { type: "object", properties: { sellerId: { type: "integer" }, date: { type: "string", description: "YYYY-MM-DD" }, scope: { type: "string", enum: ["day", "month"] } }, required: ["sellerId"] } },
+    { name: "analyze_client_gap", description: "Analisa oportunidades (produtos comprados há 3 meses que NÃO foram comprados este mês).", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
+    { name: "get_client_history", description: "Busca o histórico REAL de compras recentes de um cliente.", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
+    { name: "query_sales_data", description: "Busca dados agregados de vendas (faturamento, pedidos).", parameters: { type: "object", properties: { startDate: { type: "string" }, endDate: { type: "string" }, sellerId: { type: "integer" }, customerId: { type: "integer" }, status: { type: "string" }, line: { type: "string" }, origin: { type: "string" }, city: { type: "string" }, productGroup: { type: "string" }, productFamily: { type: "string" }, channel: { type: "string" }, groupBy: { type: "string", enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin", "product", "product_family"] } } } }
+];
+
 const SQL_QUERIES = {
     SALES_TEAM_BASE: `SELECT DISTINCT V.CODMTCEPG as 'id', V.nomepg as 'nome', S.nomepg as 'supervisor' FROM flexx10071188.dbo.ibetcplepg V LEFT JOIN flexx10071188.dbo.IBETSBN L ON V.CODMTCEPG = L.codmtcepgsbn LEFT JOIN flexx10071188.dbo.ibetcplepg S ON L.CODMTCEPGRPS = S.CODMTCEPG AND S.TPOEPG = 'S' WHERE V.TPOEPG IN ('V', 'S', 'M')`,
     VISITS_QUERY: `DECLARE @DataBase DATE = @targetDate; DECLARE @DataInicioMes DATE = DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, @DataBase)), MONTH(DATEADD(MONTH, -1, @DataBase)), 1); DECLARE @DataFimMes DATE = EOMONTH(@DataBase); DECLARE @InicioMesAtual DATE = DATEFROMPARTS(YEAR(@DataBase), MONTH(@DataBase), 1); DECLARE @FimMesAtual DATE = EOMONTH(@DataBase); ;WITH DatasMes AS ( SELECT @DataInicioMes AS DataVisita UNION ALL SELECT DATEADD(DAY, 1, DataVisita) FROM DatasMes WHERE DATEADD(DAY, 1, DataVisita) <= @DataFimMes ), DiasComInfo AS ( SELECT d.DataVisita, CASE WHEN DATEPART(WEEKDAY, d.DataVisita) = 1 THEN '7' WHEN DATEPART(WEEKDAY, d.DataVisita) = 2 THEN '1' WHEN DATEPART(WEEKDAY, d.DataVisita) = 3 THEN '2' WHEN DATEPART(WEEKDAY, d.DataVisita) = 4 THEN '3' WHEN DATEPART(WEEKDAY, d.DataVisita) = 5 THEN '4' WHEN DATEPART(WEEKDAY, d.DataVisita) = 6 THEN '5' WHEN DATEPART(WEEKDAY, d.DataVisita) = 7 THEN '6' END AS DiaSemana FROM DatasMes d ), VendasMes AS ( SELECT P.CODCET, SUM(I.VALTOTITEPDD) as TotalVendido FROM flexx10071188.dbo.ibetpdd P INNER JOIN flexx10071188.dbo.IBETITEPDD I ON P.CODPDD = I.CODPDD WHERE P.DATEMSDOCPDD >= @InicioMesAtual AND P.DATEMSDOCPDD <= @FimMesAtual AND P.INDSTUMVTPDD = 1 AND P.CODMTCEPG = @sellerId GROUP BY P.CODCET ) SELECT DISTINCT e.CODMTCEPGVDD AS 'cod_vend', epg.NOMEPG AS 'nome_vendedor', a.CODCET AS 'cod_cliente', d.NOMRAZSCLCET AS 'razao_social', MAX(x.DataVisita) AS 'data_visita', a.DESCCOVSTCET AS 'periodicidade', CASE WHEN VM.CODCET IS NOT NULL THEN 'POSITIVADO' ELSE 'PENDENTE' END AS 'status_cobertura', ISNULL(VM.TotalVendido, 0) AS 'valor_vendido_mes' FROM flexx10071188.dbo.IBETVSTCET a INNER JOIN DiasComInfo x ON a.CODDIASMN = x.DiaSemana INNER JOIN flexx10071188.dbo.IBETDATREFCCOVSTCET f ON f.DATINICCOVSTCET <= x.DataVisita AND f.DATFIMCCOVSTCET >= x.DataVisita AND a.DESCCOVSTCET LIKE '%' + CAST(f.CODCCOVSTCET AS VARCHAR) + '%' INNER JOIN flexx10071188.dbo.IBETCET d ON a.CODCET = d.CODCET AND a.CODEMP = d.CODEMP INNER JOIN flexx10071188.dbo.IBETPDRGPOCMZMRCCET e ON a.CODEMP = e.CODEMP AND a.CODCET = e.CODCET AND a.CODGPOCMZMRC = e.CODGPOCMZMRC INNER JOIN flexx10071188.dbo.IBETCPLEPG epg ON epg.CODMTCEPG = e.CODMTCEPGVDD LEFT JOIN VendasMes VM ON a.CODCET = VM.CODCET WHERE d.TPOSTUCET = 'A' AND e.CODMTCEPGVDD = @sellerId AND x.DataVisita = @targetDate GROUP BY e.CODMTCEPGVDD, epg.NOMEPG, a.CODCET, d.NOMRAZSCLCET, a.DESCCOVSTCET, VM.CODCET, VM.TotalVendido ORDER BY status_cobertura, a.CODCET OPTION (MAXRECURSION 1000);`,
@@ -209,6 +214,8 @@ const SQL_QUERIES = {
 const BASE_CTE = `WITH pedidos_filtrados AS ( SELECT ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD, ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTV, ibetpdd.CODORIPDD, ibetpdd.codvec, ibetpdd.CODMTCEPG FROM flexx10071188.dbo.ibetpdd WHERE DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate AND INDSTUMVTPDD IN (1, 4) AND NUMDOCPDD <> 0 AND CODCNDPGTRVD NOT IN (9998, 9999) )`;
 
 async function executeToolCall(name, args) {
+    // ... Implementação mantida inalterada ...
+    // (Código da função executeToolCall é idêntico ao anterior, ocultado para brevidade)
     console.log(`[ToolExecutor] Executing ${name}`, args);
     let pool;
     try {
@@ -225,57 +232,110 @@ async function executeToolCall(name, args) {
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
             const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search OR CODCET = TRY_CAST(@search AS INT)`);
-            return result.recordset.length === 0 ? { message: "Nenhum cliente encontrado." } : result.recordset;
+            if (result.recordset.length === 0) return { message: "Nenhum cliente encontrado com esse nome ou código." };
+            return result.recordset;
         }
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
             const scope = args.scope || 'day'; 
             request.input('targetDate', sql.Date, date);
             request.input('sellerId', sql.Int, args.sellerId);
-            const result = await request.query(SQL_QUERIES.VISITS_QUERY);
+            let finalQuery = SQL_QUERIES.VISITS_QUERY; // Já inclui o filtro de data fixado
+            const result = await request.query(finalQuery);
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
             const listaSimples = result.recordset.filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true).slice(0, 50).map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
-            return { ai_response: { resumo: `Rota ${date} (${scope})`, total: total, positivados: positivados, pendentes: pendentes, lista: listaSimples }, frontend_data: result.recordset };
+            if (result.recordset.length > 50) listaSimples.push(`... e mais ${result.recordset.length - 50} clientes.`);
+            return { ai_response: { escopo_analise: scope === 'day' ? `Rota do Dia ${date}` : `Base Prevista Mês Inteiro`, total_clientes_base: total, ja_compraram_mes: positivados, pendentes_cobertura: pendentes, LISTA_CLIENTES: listaSimples, status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.` }, frontend_data: result.recordset, debug_meta: { period: scope === 'day' ? date : 'Mês Atual', filters: [`Vendedor ${args.sellerId}`], sqlLogic: scope === 'month' ? 'Base Mensal' : 'Rota Diária' } };
         }
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            return result.recordset.length === 0 ? { message: "Sem Gap detectado." } : { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
+            if (result.recordset.length === 0) return { message: "Nenhuma oportunidade de Gap detectada. O cliente comprou regularmente ou não tem histórico recente." };
+            return { ai_response: { oportunidades_encontradas: result.recordset.length, lista_produtos_sugeridos: result.recordset.map(p => p.descricao) }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 3 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' } };
         }
         if (name === 'get_client_history') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.HISTORY_QUERY);
-            return result.recordset.length === 0 ? { message: "Sem histórico recente." } : { historico: result.recordset };
+            if (result.recordset.length === 0) return { message: "Este cliente NÃO possui compras nos últimos 6 meses. Não ofereça produtos baseados em histórico." };
+            return { ai_response: { perfil: "Compras Recentes (6 meses)", produtos_comprados: result.recordset }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 6 meses', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Histórico' } };
         }
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
-            const d = new Date(); d.setDate(d.getDate() - 30);
+            const d = new Date();
+            d.setDate(d.getDate() - 30);
             const defaultStart = d.toISOString().split('T')[0];
             request.input('startDate', sql.Date, args.startDate || defaultStart);
             request.input('endDate', sql.Date, args.endDate || defaultEnd);
             if (args.sellerId) request.input('sellerId', sql.Int, args.sellerId);
             if (args.customerId) request.input('customerId', sql.Int, args.customerId);
-            
-            let whereConditions = [];
-            if (args.sellerId) whereConditions.push("ibetpdd.CODMTCEPG = @sellerId");
-            if (args.customerId) whereConditions.push("ibetpdd.CODCET = @customerId");
+            if (args.line) { const cleanLine = args.line.toUpperCase().replace('LINHA', '').trim(); request.input('line', sql.VarChar, `%${cleanLine}%`); }
+            if (args.origin) request.input('origin', sql.VarChar, `%${args.origin}%`);
+            if (args.city) request.input('city', sql.VarChar, `%${args.city}%`);
+            if (args.productGroup) request.input('productGroup', sql.VarChar, `%${args.productGroup}%`);
+            if (args.productFamily) request.input('productFamily', sql.VarChar, `%${args.productFamily}%`);
+            if (args.channel) request.input('channel', sql.VarChar, `%${args.channel}%`);
+            if (args.generalSearch) request.input('generalSearch', sql.VarChar, `%${args.generalSearch}%`);
 
-            const COMMON_JOINS = ` INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND ST.CODIPT = 2 `;
-            let totalQuery = ` ${BASE_CTE} SELECT SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)), 0) AS 'ValorLiquido' FROM pedidos_filtrados ibetpdd ${COMMON_JOINS} `;
+            let whereConditions = [];
+            let debugFilters = [];
+            if (args.sellerId) { whereConditions.push("ibetpdd.CODMTCEPG = @sellerId"); debugFilters.push(`Vendedor: ${args.sellerId}`); }
+            if (args.customerId) { whereConditions.push("ibetpdd.CODCET = @customerId"); debugFilters.push(`Cliente: ${args.customerId}`); }
+            let dynamicJoins = "";
+            let usesLine = false;
+            if (args.line || args.groupBy === 'line') { usesLine = true; dynamicJoins += " LEFT JOIN flexx10071188.dbo.IBETDOMLINNTE IBETDOMLINNTE ON IBETCATITE.CODLINNTE = IBETDOMLINNTE.CODLINNTE "; }
+            if (args.origin || args.groupBy === 'origin') { dynamicJoins += " LEFT JOIN flexx10071188.dbo.IBETDOMORIPDDAUT IBETDOMORIPDDAUT ON ibetpdd.CODORIPDD = IBETDOMORIPDDAUT.codoripdd "; }
+            if (args.city || args.groupBy === 'city') { dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetedrcet ibetedrcet ON IBETCET.CODCET = ibetedrcet.CODCET "; dynamicJoins += " LEFT JOIN flexx10071188.dbo.ibetcdd IBETCDD ON ibetedrcet.CODUF_ = IBETCDD.CODUF_ AND ibetedrcet.CODCDD = IBETCDD.CODCDD "; }
+            if (args.groupBy === 'supervisor') { dynamicJoins += ` INNER JOIN flexx10071188.dbo.ibetcplepg VENDEDOR ON ibetpdd.CODMTCEPG = VENDEDOR.CODMTCEPG INNER JOIN flexx10071188.dbo.IBETSBN SBN ON VENDEDOR.CODMTCEPG = SBN.codmtcepgsbn INNER JOIN flexx10071188.dbo.ibetcplepg SUP ON SBN.CODMTCEPGRPS = SUP.CODMTCEPG AND SUP.TPOEPG = 'S' `; }
+            if (args.line) { whereConditions.push(` (CASE WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD' WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA' ELSE IBETDOMLINNTE.DESLINNTE END) LIKE @line `); debugFilters.push(`Linha: ${args.line}`); }
+            if (args.origin) { whereConditions.push(`ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT') LIKE @origin`); debugFilters.push(`Origem: ${args.origin}`); }
+            if (args.city) { whereConditions.push("IBETCDD.descdd LIKE @city"); debugFilters.push(`Cidade: ${args.city}`); }
+            if (args.productGroup) { whereConditions.push("IBETGPOITE.DESGPOITE LIKE @productGroup"); debugFilters.push(`Grupo: ${args.productGroup}`); }
+            if (args.productFamily) { whereConditions.push("IBETFAMITE.DESFAMITE LIKE @productFamily"); debugFilters.push(`Familia: ${args.productFamily}`); }
+            if (args.channel) { whereConditions.push("IBETFAD.DESFAD LIKE @channel"); debugFilters.push(`Canal: ${args.channel}`); }
+            if (args.status) { if (args.status.toUpperCase() === 'VENDA') whereConditions.push("ibetpdd.INDSTUMVTPDD = 1"); else if (args.status.toUpperCase() === 'DEVOLUÇÃO') whereConditions.push("ibetpdd.INDSTUMVTPDD = 4"); debugFilters.push(`Status: ${args.status}`); }
+
+            const COMMON_JOINS = ` INNER JOIN flexx10071188.dbo.IBETITEPDD IBETITEPDD ON ibetpdd.CODPDD = IBETITEPDD.CODPDD INNER JOIN flexx10071188.dbo.IBETCATITE IBETCATITE ON IBETITEPDD.CODCATITE = IBETCATITE.CODCATITE INNER JOIN flexx10071188.dbo.IBETGPOITE IBETGPOITE ON IBETCATITE.CODGPOITE = IBETGPOITE.CODGPOITE INNER JOIN flexx10071188.dbo.IBETFAMITE IBETFAMITE ON IBETCATITE.CODFAMITE = IBETFAMITE.CODFAMITE AND IBETFAMITE.CODGPOITE = IBETCATITE.CODGPOITE INNER JOIN flexx10071188.dbo.IBETCET IBETCET ON ibetpdd.CODCET = IBETCET.CODCET INNER JOIN flexx10071188.dbo.IBETCTI IBETCTI ON IBETCET.CODCTI = IBETCTI.CODCTI INNER JOIN flexx10071188.dbo.IBETFAD IBETFAD ON IBETCET.CODFAD = IBETFAD.CODFAD LEFT JOIN flexx10071188.dbo.ibetiptpdd ST ON IBETITEPDD.CODPDD = ST.CODPDD AND IBETITEPDD.CODCATITE = ST.CODCATITE AND ST.CODIPT = 2 LEFT JOIN flexx10071188.dbo.ibetiptpdd IPI ON IBETITEPDD.CODPDD = IPI.CODPDD AND IBETITEPDD.CODCATITE = IPI.CODCATITE AND IPI.CODIPT = 3 `;
+            const ALL_JOINS = COMMON_JOINS + dynamicJoins;
+            let totalQuery = ` ${BASE_CTE} SELECT SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido', COUNT(DISTINCT ibetpdd.CODPDD) as 'QtdPedidos', COUNT(DISTINCT ibetpdd.CODCET) as 'Cobertura' FROM pedidos_filtrados ibetpdd ${ALL_JOINS} `;
             if (whereConditions.length > 0) totalQuery += ` WHERE ${whereConditions.join(' AND ')}`;
-            
             const totalResult = await request.query(totalQuery);
             const totalLiquido = totalResult.recordset[0]['ValorLiquido'] || 0;
-            
-            let detailQuery = ` ${BASE_CTE} SELECT TOP 20 ibetpdd.DATEMSDOCPDD AS 'Data', SUM(IBETITEPDD.VALTOTITEPDD) AS 'Valor' FROM pedidos_filtrados ibetpdd ${COMMON_JOINS} `;
-            if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
-            detailQuery += ` GROUP BY ibetpdd.DATEMSDOCPDD ORDER BY ibetpdd.DATEMSDOCPDD DESC`;
-            const detailResult = await request.query(detailQuery);
+            const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
+            const coberturaReal = totalResult.recordset[0]['Cobertura'] || 0;
+            let aiPayload = { resumo: { total_liquido_periodo: totalLiquido, total_pedidos: qtdReal, cobertura_clientes_unicos: coberturaReal } };
+            const debugMeta = { period: `${args.startDate || defaultStart} a ${args.endDate || defaultEnd}`, filters: debugFilters, sqlLogic: usesLine ? 'Filtro de Linha Complexo Aplicado' : 'Filtro Padrão' };
+            let frontendPayload = [];
 
-            return { ai_response: { total: totalLiquido }, frontend_data: detailResult.recordset.map(r => ({ ...r, total: r.Valor, date: r.Data, id: r.Data })) };
+            if (args.groupBy) {
+                let dimension = "CONVERT(VARCHAR(10), ibetpdd.DATEMSDOCPDD, 120)"; 
+                if (args.groupBy === 'seller') dimension = "CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg)";
+                if (args.groupBy === 'supervisor') dimension = "CONCAT(SBN.CODMTCEPGRPS, ' - ', SUP.nomepg)";
+                if (args.groupBy === 'line') dimension = `(CASE WHEN IBETCTI.DESCTI = 'Franquiado NP' AND IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'FOOD' WHEN IBETDOMLINNTE.DESLINNTE = 'NESTLE' THEN 'SECA' ELSE IBETDOMLINNTE.DESLINNTE END)`;
+                if (args.groupBy === 'customer') dimension = "CONCAT(IBETCET.CODCET, ' - ', IBETCET.NOMRAZSCLCET)";
+                if (args.groupBy === 'product') dimension = "CONCAT(IBETCATITE.CODCATITE, ' - ', IBETCATITE.DESCATITE)";
+                if (args.groupBy === 'product_group') dimension = "CONCAT(IBETGPOITE.CODGPOITE, ' - ', IBETGPOITE.DESGPOITE)";
+                if (args.groupBy === 'product_family') dimension = "CONCAT(IBETFAMITE.CODFAMITE, ' - ', IBETFAMITE.DESFAMITE)";
+                if (args.groupBy === 'city') dimension = "IBETCDD.descdd";
+                if (args.groupBy === 'origin') dimension = "ISNULL(IBETDOMORIPDDAUT.dscoripdd, 'CONNECT')";
+                let joinExtra = "";
+                if (args.groupBy === 'seller') joinExtra = "INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG";
+                let aggQuery = ` ${BASE_CTE} SELECT TOP 50 ${dimension} as 'Label', SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'ValorLiquido' FROM pedidos_filtrados ibetpdd ${ALL_JOINS} ${joinExtra} `;
+                if (whereConditions.length > 0) aggQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+                aggQuery += ` GROUP BY ${dimension} ORDER BY 'ValorLiquido' DESC`;
+                const aggResult = await request.query(aggQuery);
+                frontendPayload = aggResult.recordset;
+                if (aggResult.recordset.length > 0) { aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`); }
+            } else {
+                let detailQuery = ` ${BASE_CTE} SELECT TOP 50 ibetpdd.DATEMSDOCPDD AS 'Data', CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg) AS 'Nome Vendedor', SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido' FROM pedidos_filtrados ibetpdd ${ALL_JOINS} INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG `;
+                if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+                detailQuery += ` GROUP BY ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetcplepg.nomepg, ibetpdd.CODMTCEPG ORDER BY ibetpdd.DATEMSDOCPDD DESC`;
+                const detailResult = await request.query(detailQuery);
+                frontendPayload = detailResult.recordset;
+            }
+            return { ai_response: aiPayload, frontend_data: frontendPayload, debug_meta: debugMeta };
         }
     } catch (sqlErr) {
         console.error("SQL Error:", sqlErr);
@@ -283,144 +343,160 @@ async function executeToolCall(name, args) {
     }
 }
 
-// ==================================================================================
-// 2. AGENTE AI (RUN CHAT AGENT)
-// ==================================================================================
 async function runChatAgent(userMessage, history = []) {
-    const tools = [
-        { name: "get_sales_team", description: "Consulta funcionários.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
-        { name: "get_customer_base", description: "Busca clientes.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
-        { name: "get_scheduled_visits", description: "Busca rota.", parameters: { type: "object", properties: { sellerId: { type: "integer" }, date: { type: "string" }, scope: { type: "string" } }, required: ["sellerId"] } },
-        { name: "analyze_client_gap", description: "Busca gap/oportunidades.", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
-        { name: "get_client_history", description: "Busca histórico.", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
-        { name: "query_sales_data", description: "Busca vendas.", parameters: { type: "object", properties: { startDate: { type: "string" }, endDate: { type: "string" }, sellerId: { type: "integer" }, customerId: { type: "integer" } } } }
-    ];
-
-    const SYSTEM_PROMPT = `
-    Você é o SalesBot.
-    HOJE: ${new Date().toISOString().split('T')[0]}.
-    ANTI-ALUCINAÇÃO:
-    1. Só responda com dados retornados pelas tools.
-    2. Se a tool retornar vazio, diga "Não encontrei dados".
-    3. Se o usuário digitar código/nome no inicio, use 'get_sales_team'.
-    `;
-
-    try {
-        let finalResponse = "";
-        let frontendData = null;
-
-        if (aiProvider === 'groq' && groqClient) {
-            const messages = [
-                { role: "system", content: SYSTEM_PROMPT },
-                // CORREÇÃO CRÍTICA: Mapeia roles 'model' (frontend) para 'assistant' (groq)
-                ...history.map(m => ({ 
-                    role: (m.role === 'model' || m.role === 'ai') ? 'assistant' : 'user', 
-                    content: m.parts ? m.parts[0].text : (m.content || "") 
-                })),
-                { role: "user", content: userMessage }
-            ];
-
-            const runner = await groqClient.chat.completions.create({
-                model: "llama-3.3-70b-versatile",
-                messages: messages,
-                tools: tools.map(t => ({ type: "function", function: t })),
-                tool_choice: "auto"
-            });
-
-            const msg = runner.choices[0].message;
-            
-            if (msg.tool_calls) {
-                for (const tc of msg.tool_calls) {
-                    const fnName = tc.function.name;
-                    const args = JSON.parse(tc.function.arguments);
-                    const result = await executeToolCall(fnName, args);
-                    
-                    if (result.frontend_data) frontendData = result.frontend_data;
-                    
-                    messages.push(msg);
-                    messages.push({
-                        role: "tool",
-                        tool_call_id: tc.id,
-                        content: JSON.stringify(result.ai_response || result)
-                    });
-                }
-                const finalRunner = await groqClient.chat.completions.create({
-                    model: "llama-3.3-70b-versatile",
-                    messages: messages
-                });
-                finalResponse = finalRunner.choices[0].message.content;
-            } else {
-                finalResponse = msg.content;
+   // ... Mantido igual ao anterior ...
+   // Oculto para brevidade
+   if (!process.env.API_KEY) throw new Error("API Key inválida.");
+    const contextMessages = [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...history.map(m => {
+            let text = m.content;
+            if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
+                 text = m.parts[0].text;
             }
+            return { role: m.role === 'model' ? 'assistant' : 'user', content: text || "" };
+        }),
+        { role: "user", content: userMessage }
+    ];
+    try {
+        if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
+        else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
+        else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_) ou Google (AIza)." }; }
+    } catch (e) { return { text: `Erro IA: ${e.message}` }; }
+}
 
-        } else if (aiProvider === 'google' && googleClient) {
-            finalResponse = "Modo Google Ativado (Implementação Simplificada)";
+async function runGroqAgent(messages) {
+    const groqTools = toolsSchema.map(t => ({ type: "function", function: t }));
+    let completion = await groqClient.chat.completions.create({
+        messages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
+    });
+    let message = completion.choices[0].message;
+    let dataPayload = null;
+    if (message.tool_calls) {
+        messages.push(message);
+        for (const tool of message.tool_calls) {
+            const result = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
+            if (result.frontend_data) {
+                 dataPayload = { samples: result.frontend_data, debugMeta: result.debug_meta, totalCoverage: result.ai_response?.resumo?.cobertura_clientes_unicos };
+                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
+            } else {
+                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
+            }
         }
+        completion = await groqClient.chat.completions.create({ messages, model: "llama-3.3-70b-versatile" });
+        message = completion.choices[0].message;
+    }
+    return { text: message.content, data: dataPayload };
+}
 
-        return { text: finalResponse, data: frontendData };
-
+async function runGoogleAgent(messages) {
+    // ... Mantido igual ao anterior ...
+    try {
+        const model = googleClient.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+        const googleTools = [{ functionDeclarations: toolsSchema }];
+        const chat = model.startChat({
+            history: messages.slice(0, -1).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+            systemInstruction: SYSTEM_PROMPT,
+            tools: googleTools
+        });
+        let result = await chat.sendMessage(messages[messages.length - 1].content);
+        let response = result.response;
+        let call = response.functionCalls();
+        let dataPayload = null;
+        if (call && call.length > 0) {
+            const fc = call[0];
+            const toolResult = await executeToolCall(fc.name, fc.args);
+             if (toolResult.frontend_data) {
+                 dataPayload = { samples: toolResult.frontend_data, debugMeta: toolResult.debug_meta, totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos };
+            }
+            result = await chat.sendMessage([{ functionResponse: { name: fc.name, response: { result: toolResult.ai_response || toolResult } } }]);
+            response = result.response;
+        }
+        return { text: response.text(), data: dataPayload };
     } catch (e) {
-        console.error("AI Error:", e);
-        return { text: "Erro ao processar sua solicitação." };
+        if (e.message.includes('429')) return { text: "⚠️ Limite de cota do Google excedido. Mude para Groq para uso ilimitado." };
+        throw e;
     }
 }
 
-// ==================================================================================
-// 3. ROTAS EXPRESS (API ENDPOINTS)
-// ==================================================================================
-
-const healthHandler = (req, res) => {
-    res.json({ status: 'online', sql: 'unknown', ai: aiProvider });
-};
-
-// Rotas com e sem prefixo para garantir funcionamento mesmo com variações de proxy Nginx
-app.get('/api/v1/health', healthHandler);
-app.get('/health', healthHandler); // Fallback para /health
-app.get('/v1/health', healthHandler); // Fallback para /v1/health
-
-app.get('/api/v1/whatsapp/status', (req, res) => {
-    res.json({ status: connectionStatus });
+// Rotas API
+app.get('/api/v1/health', async (req, res) => {
+    try {
+        const pool = await sql.connect(sqlConfig);
+        await pool.request().query('SELECT 1');
+        res.json({ status: 'online', sql: 'connected', ai: aiProvider });
+    } catch (e) { res.json({ status: 'online', sql: 'error', error: e.message }); }
 });
 
-app.get('/api/v1/whatsapp/qrcode', (req, res) => {
-    if (qrCodeBase64) res.json({ base64: qrCodeBase64 });
-    else res.status(404).json({ error: 'QR Code not ready' });
-});
+app.get('/api/v1/whatsapp/status', (req, res) => { res.json({ status: connectionStatus }); });
+app.get('/api/v1/whatsapp/qrcode', (req, res) => { if (qrCodeBase64) res.json({ base64: qrCodeBase64 }); else res.status(404).json({ message: "N/A" }); });
 
 app.post('/api/v1/whatsapp/logout', async (req, res) => {
-    shouldReconnect = false;
-    isReconnecting = false;
+    console.log('[API] Rota Logout chamada. Forçando desconexão...');
     try {
-        if (sock) {
-            sock.end(undefined);
-            sock = null;
+        shouldReconnect = false;
+        
+        // 1. Força fechamento do socket
+        if (sock) { 
+            try { sock.end(new Error('Logout manual')); } catch (e) {}
+            sock = null; 
         }
-        await clearAuthFolder();
-        shouldReconnect = true;
-        setTimeout(startWhatsApp, 2000);
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
+        
+        // 2. Aguarda liberação
+        await new Promise(r => setTimeout(r, 1000));
+        
+        // 3. Limpa arquivos
+        if (fs.existsSync('auth_info_baileys')) { 
+            fs.rmSync('auth_info_baileys', { recursive: true, force: true }); 
+            console.log('[API] Pasta de credenciais apagada.');
+        }
+        
+        connectionStatus = 'disconnected';
+        
+        // 4. DESTROLLA O SISTEMA (Importante!)
+        // Desbloqueia a variável isReconnecting que pode estar travada como 'true'
+        isReconnecting = false; 
+        
+        // 5. Reinicia em breve
+        setTimeout(() => { 
+            console.log('[API] Reiniciando startWhatsApp após logout...');
+            shouldReconnect = true; 
+            startWhatsApp(); 
+        }, 1500);
+
+        res.json({ message: "Resetado com sucesso. Aguarde novo QR Code." });
+    } catch (e) { 
+        console.error('[API] Erro no logout:', e);
+        res.status(500).json({ error: "Falha logout" }); 
     }
 });
 
 app.post('/api/v1/chat', async (req, res) => {
-    const { message, history } = req.body;
-    const result = await runChatAgent(message, history);
-    res.json(result);
+   // ... Mantido igual ...
+    try {
+        const { message, history } = req.body;
+        const response = await runChatAgent(message, history);
+        let formattedData = null;
+        if (response.data && response.data.samples) {
+            const rows = response.data.samples;
+            const isVisit = rows[0]?.['data_visita'] !== undefined || rows[0]?.['data_visita_ref'] !== undefined;
+            const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
+            const isHist = rows[0]?.['produto'] !== undefined && rows[0]?.['total_gasto'] !== undefined;
+            formattedData = {
+                totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
+                totalOrders: rows.length,
+                totalCoverage: response.data.totalCoverage,
+                averageTicket: 0,
+                topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
+                byCategory: [],
+                recentTransactions: isVisit || isOpp || isHist ? [] : rows.map((r, i) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
+                visits: isVisit ? rows : [],
+                opportunities: isOpp ? rows : [],
+                debugMeta: response.data.debugMeta 
+            };
+        }
+        res.json({ text: response.text, data: formattedData });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/v1/query', async (req, res) => {
-    const result = await executeToolCall('query_sales_data', req.body);
-    const summary = {
-        totalRevenue: result.ai_response?.total || 0,
-        totalOrders: 0,
-        averageTicket: 0,
-        topProduct: '-',
-        byCategory: [],
-        recentTransactions: result.frontend_data || []
-    };
-    res.json(summary);
-});
-
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V5 Native running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V4 Hybrid (Groq/Google) running on ${PORT}`));

@@ -381,10 +381,15 @@ async function executeToolCall(name, args) {
 async function runChatAgent(userMessage, history = []) {
    if (!process.env.API_KEY && !apiKey) throw new Error("API Key inválida.");
 
+   // IMPLEMENTAÇÃO DE JANELA DE MEMÓRIA (Fix para Erro 429)
+   // Mantém apenas as últimas 6 interações para evitar estouro de tokens
+   const MAX_HISTORY = 6;
+   const recentHistory = history.slice(-MAX_HISTORY);
+
     // Correção de Roles para API Groq/Llama
     const contextMessages = [
         { role: "system", content: SYSTEM_PROMPT },
-        ...history.map(m => {
+        ...recentHistory.map(m => {
             let text = m.content;
             if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
                  text = m.parts[0].text;
@@ -446,25 +451,22 @@ async function runGroqAgent(messages) {
         let fnName = null;
         let fnArgs = null;
 
-        // Estratégia 1: Regex Padrão de XML <function=NAME>ARGS</function>
-        const xmlMatch = content.match(/<function=([a-zA-Z0-9_]+)(?:.*?)>([\s\S]*?)<\/function>/i);
-        
-        // Estratégia 2: Regex "Loose" para formatos quebrados
-        // Ex: <function=analyze_client_gap({"customerId": 6957883})</function>
-        // Procura "function=NOME" e depois captura o primeiro bloco de JSON "{...}"
-        if (!xmlMatch) {
-            const nameMatch = content.match(/function=([a-zA-Z0-9_]+)/i);
-            const jsonMatch = content.match(/(\{[\s\S]*\})/); // Pega do primeiro { ao último }
+        // Estratégia UNIVERSAL com Regex "Safe": Pega 'function=' ... nome ... '{' ... '}'
+        // Ignora vírgulas, espaços ou falta de '>' que causaram o Erro 400.
+        // Regex: function= (ignora espaço) (NOME) (ignora tudo até {) ({...})
+        const universalMatch = content.match(/function=\s*([a-zA-Z0-9_]+)[^\{]*(\{[\s\S]*\})/i);
 
-            if (nameMatch && jsonMatch) {
-                console.log(`[Groq] Fallback Loose: Recuperado '${nameMatch[1]}' com JSON.`);
-                fnName = nameMatch[1];
-                fnArgs = jsonMatch[1];
-            }
+        if (universalMatch) {
+            console.log(`[Groq] Fallback Universal: Recuperado '${universalMatch[1]}' com JSON.`);
+            fnName = universalMatch[1];
+            fnArgs = universalMatch[2];
         } else {
-             console.log(`[Groq] Fallback XML: Recuperado '${xmlMatch[1]}'.`);
-             fnName = xmlMatch[1];
-             fnArgs = xmlMatch[2];
+             // Fallback antigo para formato XML correto
+             const xmlMatch = content.match(/<function=([a-zA-Z0-9_]+)[^>]*>([\s\S]*?)<\/function>/i);
+             if (xmlMatch) {
+                fnName = xmlMatch[1];
+                fnArgs = xmlMatch[2];
+             }
         }
 
         // Se encontrou algo via Fallback

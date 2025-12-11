@@ -175,12 +175,16 @@ const sqlConfig = {
     options: { encrypt: false, trustServerCertificate: true }
 };
 
-const apiKey = process.env.API_KEY || '';
+// Configuração da API Key
+const apiKey = process.env.API_KEY;
+
 let aiProvider = 'unknown';
 let groqClient = null;
 let googleClient = null;
 
-if (apiKey.startsWith('gsk_')) {
+if (!apiKey) {
+    console.warn('⚠️ [AI] AVISO: API_KEY não encontrada nas variáveis de ambiente. O agente de IA não funcionará.');
+} else if (apiKey.startsWith('gsk_')) {
     console.log('[AI] Detectada chave GROQ. Usando Llama 3.');
     aiProvider = 'groq';
     groqClient = new Groq({ apiKey: apiKey });
@@ -196,27 +200,39 @@ const SYSTEM_PROMPT = `
 Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${new Date().toISOString().split('T')[0]}.
 
-INSTRUÇÕES CRÍTICAS (ANTI-ALUCINAÇÃO):
-1. O usuário NÃO quer ver JSON ou nomes de funções.
-2. Se você precisar de dados, chame a ferramenta usando 'tool_calls'.
-3. Se você receber dados da ferramenta, resuma-os em linguagem natural.
-4. Se você escrever o nome de uma função, certifique-se de que é um erro e tente não fazer isso.
+REGRAS DE FORMATAÇÃO RIGÍDAS (OBRIGATÓRIO):
+1. CLIENTES: Sempre use o formato "CÓDIGO - NOME". 
+   - CERTO: "1050 - MERCADO CENTRAL"
+   - ERRADO: "MERCADO CENTRAL"
+   - ERRADO: "1050 MERCADO CENTRAL"
+   
+2. PRODUTOS: Sempre use o formato "CÓDIGO - DESCRIÇÃO". 
+   - CERTO: "334 - CHOCOLATE 100G"
+   - ERRADO: "CHOCOLATE 100G"
 
-OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
+3. VALORES: Use formato BRL (R$ 1.000,00).
 
-FLUXO DE RACIOCÍNIO:
-1. Analise o pedido do usuário.
-2. Mapeie para a ferramenta correta:
-   - "Minha rota", "visitas hoje", "101" -> get_scheduled_visits
-   - "O que oferecer", "Oportunidades", "O que não comprou" -> analyze_client_gap
-   - "Histórico", "O que ele compra" -> get_client_history
-   - "Total vendido", "Minhas vendas" -> query_sales_data
-3. Execute a ferramenta e responda COM OS DADOS RETORNADOS.
+REGRAS DE COMPORTAMENTO POR CENÁRIO:
 
-PROTOCOLO DE SEGURANÇA:
-- NÃO INVENTE DADOS.
+CENÁRIO 1: PERGUNTA DE ROTA ("Minha rota", "Visitas hoje")
+- Ferramenta: use 'get_scheduled_visits'.
+- Resposta:
+  - Informe o TOTAL DE VISITAS.
+  - Informe quantos já foram POSITIVADOS (Compraram no mês).
+  - Informe quantos estão PENDENTES (Sem compra no mês).
+  - Liste os clientes no formato "CÓDIGO - NOME".
+  - PROIBIDO: Nunca diga "confirmou visita" ou "agendou".
+
+CENÁRIO 2: AJUDA COM CLIENTE / OPPORTUNIDADES ("Ajude com cliente X", "O que oferecer")
+- Ferramenta: use 'analyze_client_gap' (prioridade) ou 'get_client_history'.
+- Resposta:
+  - Liste sugestões de produtos que ele comprava (histórico) mas NÃO comprou este mês.
+  - Use o formato "CÓDIGO - DESCRIÇÃO" para os produtos.
+  - Se não houver gap, liste os mais comprados do histórico.
+
+INSTRUÇÕES GERAIS:
+- Se precisar de dados, chame a ferramenta via 'tool_calls'. NÃO INVENTE DADOS.
 - Responda de forma curta e direta (estilo WhatsApp).
-- Use BRL (R$ 1.000,00).
 `;
 
 // Tools Schema (Mantido)
@@ -224,7 +240,7 @@ const toolsSchema = [
     { name: "get_sales_team", description: "Consulta funcionários/vendedores.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
     { name: "get_customer_base", description: "Busca cadastro de clientes pelo nome.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
     { name: "get_scheduled_visits", description: "Retorna a ROTA de visitas e cobertura do vendedor.", parameters: { type: "object", properties: { sellerId: { type: "integer" }, date: { type: "string", description: "YYYY-MM-DD" }, scope: { type: "string", enum: ["day", "month"] } }, required: ["sellerId"] } },
-    { name: "analyze_client_gap", description: "Busca oportunidades de venda (Gap) para um cliente específico.", parameters: { type: "object", properties: { customerId: { type: "integer", description: "O código numérico do cliente" } }, required: ["customerId"] } },
+    { name: "analyze_client_gap", description: "Busca oportunidades de venda (Gap) para um cliente específico. Produtos que ele compra mas não comprou este mês.", parameters: { type: "object", properties: { customerId: { type: "integer", description: "O código numérico do cliente" } }, required: ["customerId"] } },
     { name: "get_client_history", description: "Busca o histórico REAL de compras recentes de um cliente.", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
     { name: "query_sales_data", description: "Busca dados agregados de vendas (faturamento, pedidos).", parameters: { type: "object", properties: { startDate: { type: "string" }, endDate: { type: "string" }, sellerId: { type: "integer" }, customerId: { type: "integer" }, status: { type: "string" }, line: { type: "string" }, origin: { type: "string" }, city: { type: "string" }, productGroup: { type: "string" }, productFamily: { type: "string" }, channel: { type: "string" }, groupBy: { type: "string", enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin", "product", "product_family"] } } } }
 ];
@@ -361,7 +377,7 @@ async function executeToolCall(name, args) {
 }
 
 async function runChatAgent(userMessage, history = []) {
-   if (!process.env.API_KEY) throw new Error("API Key inválida.");
+   if (!process.env.API_KEY && !apiKey) throw new Error("API Key inválida.");
 
     // Correção de Roles para API Groq/Llama
     const contextMessages = [
@@ -393,10 +409,30 @@ async function runGroqAgent(messages) {
     // Filtra mensagens para garantir que não haja erros de sistema
     const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
     
-    let completion = await groqClient.chat.completions.create({
-        messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
-    });
-    let message = completion.choices[0].message;
+    let completion;
+    let message;
+
+    // TRY/CATCH ESPECÍFICO PARA ERROS DA API GROQ (Malformação do Modelo)
+    try {
+        completion = await groqClient.chat.completions.create({
+            messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
+        });
+        message = completion.choices[0].message;
+    } catch (apiError) {
+        // Se a API retornar 400 por causa de formato de ferramenta inválido (Llama alucinando XML)
+        if (apiError.status === 400 && apiError.error?.failed_generation) {
+            console.log("[Groq] Erro 400 detectado. Tentando recuperar tool_call do 'failed_generation'...");
+            const failedGen = apiError.error.failed_generation;
+            
+            // Simula um objeto de mensagem com o conteúdo falho para o fallback processar
+            message = {
+                content: failedGen,
+                tool_calls: null
+            };
+        } else {
+            throw apiError; // Outros erros (401, 500) sobem normal
+        }
+    }
     
     // --- FALLBACK ROBUSTO: DETECTAR ALUCINAÇÕES DE FUNÇÃO ---
     // O modelo pode retornar o JSON puro ou algo como "get_scheduled_visits{...}" como TEXTO.
@@ -406,30 +442,65 @@ async function runGroqAgent(messages) {
         const content = message.content.trim();
         
         // 1. Regex para "NomeDaFuncao{...JSON...}"
-        // Captura o nome da função (grupo 1) e o JSON (grupo 2)
+        // Captura o nome da função (grupo 1) e o JSON (grupo 3)
+        // Aceita sinal de igual opcional (grupo 2) que o Llama adora colocar errado
         const toolNames = toolsSchema.map(t => t.name).join('|');
-        const functionRegex = new RegExp(`(${toolNames})\\s*(\\{[\\s\\S]*\\})`, 'i');
-        const match = content.match(functionRegex);
+        
+        // Regex para XML Style (O Erro 400 reportado: <function=Name>Args</function>)
+        // Aceita <function=Nome> ou <function=Nome=>
+        const xmlRegex = new RegExp(`<function=(${toolNames})(=?)>([\\s\\S]*?)</function>`, 'i');
+        const matchXml = content.match(xmlRegex);
 
-        if (match) {
-            const fnName = match[1];
-            const fnArgs = match[2];
+        // Regex Texto plano: func{args} ou func={args}
+        const textRegex = new RegExp(`(${toolNames})(=?)\\s*(\\{[\\s\\S]*\\})`, 'i');
+        const matchText = content.match(textRegex);
+
+        if (matchXml) {
+            const fnName = matchXml[1];
+            let fnArgs = matchXml[3].trim();
+            console.log(`[Groq] Fallback: Detectado formato XML para '${fnName}'.`);
+            
+            try {
+                // Tenta limpar artifacts comuns
+                if (fnArgs.startsWith('[') && fnArgs.endsWith(']')) fnArgs = fnArgs.slice(1, -1);
+                // Remove aspas extras se houver wrapper
+                if (fnArgs.startsWith('"') && fnArgs.endsWith('"')) fnArgs = fnArgs.slice(1, -1);
+                
+                // Sanitização (aspas simples para duplas)
+                const sanitizedArgs = fnArgs.includes("'") && !fnArgs.includes('"') ? fnArgs.replace(/'/g, '"') : fnArgs;
+                
+                // Valida JSON
+                JSON.parse(sanitizedArgs);
+                
+                message.tool_calls = [{
+                    id: 'call_fallback_xml_' + Date.now(),
+                    type: 'function',
+                    function: { name: fnName, arguments: sanitizedArgs }
+                }];
+                message.content = null; // Limpa texto para não exibir lixo XML
+            } catch (e) {
+                console.warn("[Groq] Falha ao parsear XML args:", e.message);
+            }
+        }
+        else if (matchText) {
+            const fnName = matchText[1];
+            const fnArgs = matchText[3];
             console.log(`[Groq] Fallback: Detectada função textual '${fnName}'. Convertendo para ToolCall.`);
             
             try {
-                // Tenta validar o JSON antes de usar
-                JSON.parse(fnArgs);
+                const sanitizedArgs = fnArgs.includes("'") && !fnArgs.includes('"') ? fnArgs.replace(/'/g, '"') : fnArgs;
+                JSON.parse(sanitizedArgs);
                 message.tool_calls = [{
                     id: 'call_fallback_' + Date.now(),
                     type: 'function',
-                    function: { name: fnName, arguments: fnArgs }
+                    function: { name: fnName, arguments: sanitizedArgs }
                 }];
-                message.content = null; // Remove o texto técnico para o usuário não ver
+                message.content = null; 
             } catch (e) {
                 console.warn("[Groq] Falha ao parsear JSON do fallback (Regex):", e.message);
             }
         } 
-        // 2. Fallback para JSON puro {"function": "nome", ...}
+        // 3. Fallback para JSON puro {"function": "nome", ...} (Padrão antigo de alguns prompts)
         else if (content.startsWith('{') && content.includes('"function"')) {
              try {
                 const potentialJson = JSON.parse(content);

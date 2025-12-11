@@ -197,21 +197,22 @@ Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${new Date().toISOString().split('T')[0]}.
 
 CRITICAL INSTRUCTIONS FOR TOOL CALLING:
-1. DO NOT output XML tags like <function> or <tool_code>.
-2. ALWAYS use the native "tool_calls" JSON format provided by the API.
-3. If the user provides a customer code (e.g., 4479498), extract it as an INTEGER for the tools.
+1. DO NOT output XML tags like <function>.
+2. DO NOT output plain JSON text like {"function": ...}.
+3. ALWAYS use the native "tool_calls" functionality provided by the API interface.
+4. If the user provides a customer code (e.g., 4479498), extract it as an INTEGER.
 
 OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
 
 FLUXO DE RACIOCÍNIO:
 1. Analise o pedido do usuário.
 2. Mapeie para a ferramenta correta:
-   - "Minha rota", "visitas hoje" -> get_scheduled_visits
+   - "Minha rota", "visitas hoje", "101" -> get_scheduled_visits
    - "O que oferecer", "Oportunidades", "O que não comprou" -> analyze_client_gap
    - "Histórico", "O que ele compra" -> get_client_history
    - "Total vendido", "Minhas vendas" -> query_sales_data
 3. Execute a ferramenta e responda COM OS DADOS RETORNADOS.
-4. Se a ferramenta analyze_client_gap não retornar nada, tente get_client_history para ver o que ele costuma comprar.
+4. Se a ferramenta analyze_client_gap não retornar nada, tente get_client_history.
 
 PROTOCOLO DE SEGURANÇA:
 - NÃO INVENTE DADOS.
@@ -397,6 +398,33 @@ async function runGroqAgent(messages) {
         messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
     });
     let message = completion.choices[0].message;
+    
+    // --- FALLBACK: DETECTAR ALUCINAÇÃO JSON NO TEXTO ---
+    if (!message.tool_calls && message.content) {
+        // Tenta detectar padrão {"function": "nome", "parameters": {...}}
+        const contentTrimmed = message.content.trim();
+        if (contentTrimmed.startsWith('{') && contentTrimmed.includes('"function"')) {
+            try {
+                const potentialJson = JSON.parse(contentTrimmed);
+                if (potentialJson.function && potentialJson.parameters) {
+                    console.log('[Groq] Detectada chamada de função via JSON text (Fallback):', potentialJson.function);
+                    message.tool_calls = [{
+                        id: 'call_fallback_' + Date.now(),
+                        type: 'function',
+                        function: {
+                            name: potentialJson.function,
+                            arguments: JSON.stringify(potentialJson.parameters)
+                        }
+                    }];
+                    message.content = null; // Limpa o texto para não retornar o JSON ao usuário
+                }
+            } catch (e) {
+                // Falha silenciosa no fallback, retorna o texto original
+            }
+        }
+    }
+    // ---------------------------------------------------
+
     let dataPayload = null;
     if (message.tool_calls) {
         validMessages.push(message);

@@ -193,17 +193,30 @@ if (apiKey.startsWith('gsk_')) {
 }
 
 const SYSTEM_PROMPT = `
-Você é o "SalesBot", um assistente comercial SQL Expert. HOJE É: ${new Date().toISOString().split('T')[0]}.
+Você é o "SalesBot", um assistente comercial SQL Expert.
+HOJE É: ${new Date().toISOString().split('T')[0]}.
+
+CRITICAL INSTRUCTIONS FOR TOOL CALLING:
+1. DO NOT output XML tags like <function> or <tool_code>.
+2. ALWAYS use the native "tool_calls" JSON format provided by the API.
+3. If the user provides a customer code (e.g., 4479498), extract it as an INTEGER for the tools.
+
 OBJETIVO: Ajudar vendedores com Metas, Vendas, ROTA DE VISITAS e COBERTURA consultando o banco de dados.
 
-PROTOCOLO DE SEGURANÇA (ANTI-ALUCINAÇÃO):
-1. USE SOMENTE DADOS RETORNADOS PELAS FERRAMENTAS.
-2. Se a ferramenta retornar "Nenhum dado encontrado" ou lista vazia, DIGA "Não encontrei informações no sistema".
-3. JAMAIS INVENTE PRODUTOS, PREÇOS OU NOMES DE CLIENTES.
-4. Se perguntarem "o que oferecer?", use 'get_client_history' para ver o que ele compra ou 'analyze_client_gap' para ver o que parou de comprar. SE AMBOS ESTIVEREM VAZIOS, DIGA QUE NÃO HÁ DADOS SUFICIENTES.
-5. Seja conciso. WhatsApp requer respostas curtas e diretas.
-6. Use formatação BRL (R$ 1.000,00) para valores monetários.
-7. IDENTIFICAÇÃO: Se o usuário iniciar a conversa informando apenas um NÚMERO ou um NOME, assuma que é a identificação do vendedor. Use a tool 'get_sales_team' para confirmar quem é. Se encontrar, cumprimente pelo nome e pergunte como pode ajudar (ex: "Quer ver sua rota ou vendas?").
+FLUXO DE RACIOCÍNIO:
+1. Analise o pedido do usuário.
+2. Mapeie para a ferramenta correta:
+   - "Minha rota", "visitas hoje" -> get_scheduled_visits
+   - "O que oferecer", "Oportunidades", "O que não comprou" -> analyze_client_gap
+   - "Histórico", "O que ele compra" -> get_client_history
+   - "Total vendido", "Minhas vendas" -> query_sales_data
+3. Execute a ferramenta e responda COM OS DADOS RETORNADOS.
+4. Se a ferramenta analyze_client_gap não retornar nada, tente get_client_history para ver o que ele costuma comprar.
+
+PROTOCOLO DE SEGURANÇA:
+- NÃO INVENTE DADOS.
+- Responda de forma curta e direta (estilo WhatsApp).
+- Use BRL (R$ 1.000,00).
 `;
 
 // Tools Schema (Mantido)
@@ -211,7 +224,7 @@ const toolsSchema = [
     { name: "get_sales_team", description: "Consulta funcionários/vendedores.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
     { name: "get_customer_base", description: "Busca cadastro de clientes pelo nome.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
     { name: "get_scheduled_visits", description: "Retorna a ROTA de visitas e cobertura do vendedor.", parameters: { type: "object", properties: { sellerId: { type: "integer" }, date: { type: "string", description: "YYYY-MM-DD" }, scope: { type: "string", enum: ["day", "month"] } }, required: ["sellerId"] } },
-    { name: "analyze_client_gap", description: "Analisa oportunidades (produtos comprados há 3 meses que NÃO foram comprados este mês).", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
+    { name: "analyze_client_gap", description: "Busca oportunidades de venda (Gap) para um cliente específico.", parameters: { type: "object", properties: { customerId: { type: "integer", description: "O código numérico do cliente" } }, required: ["customerId"] } },
     { name: "get_client_history", description: "Busca o histórico REAL de compras recentes de um cliente.", parameters: { type: "object", properties: { customerId: { type: "integer" } }, required: ["customerId"] } },
     { name: "query_sales_data", description: "Busca dados agregados de vendas (faturamento, pedidos).", parameters: { type: "object", properties: { startDate: { type: "string" }, endDate: { type: "string" }, sellerId: { type: "integer" }, customerId: { type: "integer" }, status: { type: "string" }, line: { type: "string" }, origin: { type: "string" }, city: { type: "string" }, productGroup: { type: "string" }, productFamily: { type: "string" }, channel: { type: "string" }, groupBy: { type: "string", enum: ["day", "month", "seller", "supervisor", "city", "product_group", "line", "customer", "origin", "product", "product_family"] } } } }
 ];
@@ -259,7 +272,7 @@ async function executeToolCall(name, args) {
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            return result.recordset.length === 0 ? { message: "Sem Gap detectado." } : { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
+            return result.recordset.length === 0 ? { message: "Sem Gap detectado. (Cliente comprou tudo recente ou não tem histórico)" } : { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
         }
         if (name === 'get_client_history') {
             request.input('customerId', sql.Int, args.customerId);

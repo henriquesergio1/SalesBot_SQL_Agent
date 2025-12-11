@@ -8,6 +8,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@w
 import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
+import path from 'path';
 
 const app = express();
 app.use(express.json());
@@ -24,13 +25,34 @@ let connectionStatus = 'disconnected';
 let shouldReconnect = true;
 let isReconnecting = false;
 
-const startWhatsApp = async () => {
-    console.log(`[Baileys] startWhatsApp solicitado. Bloqueio atual: ${isReconnecting}`);
-    
-    if (isReconnecting) {
-        console.log('[Baileys] Tentativa de conexão ignorada (já existe um processo em andamento).');
-        return;
+const AUTH_FOLDER = 'auth_info_baileys';
+
+// Função Helper para limpar a sessão de forma robusta (Contorna erro EBUSY)
+const clearAuthFolder = async () => {
+    if (!fs.existsSync(AUTH_FOLDER)) return;
+
+    console.log('[Baileys] Tentando limpar pasta de sessão...');
+    try {
+        // Tenta apagar
+        fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+        console.log('[Baileys] Pasta apagada com sucesso.');
+    } catch (e) {
+        console.warn(`[Baileys] Erro ao apagar pasta (${e.code}). Tentando renomear (fallback)...`);
+        try {
+            // Se falhar (arquivo preso), renomeia para liberar o nome oficial
+            const trashName = `${AUTH_FOLDER}_trash_${Date.now()}`;
+            fs.renameSync(AUTH_FOLDER, trashName);
+            console.log(`[Baileys] Pasta renomeada para ${trashName}. Novo QR Code liberado.`);
+        } catch (e2) {
+            console.error('[Baileys] Falha CRÍTICA ao limpar sessão:', e2.message);
+        }
     }
+};
+
+const startWhatsApp = async () => {
+    console.log(`[Baileys] startWhatsApp solicitado. Reconnecting: ${isReconnecting}`);
+    
+    if (isReconnecting) return;
     isReconnecting = true;
 
     try {
@@ -38,36 +60,36 @@ const startWhatsApp = async () => {
             try { sock.end(undefined); } catch (e) {}
             sock = null;
         }
-        
+
         console.log('[Baileys] Iniciando novo processo de conexão...');
         connectionStatus = 'connecting';
         qrCodeBase64 = null;
         shouldReconnect = true;
         
-        if (!fs.existsSync('auth_info_baileys')) { 
-            console.log('[Baileys] Criando pasta de autenticação...');
-            fs.mkdirSync('auth_info_baileys'); 
+        // Garante que a pasta existe (ou foi recriada após limpeza)
+        if (!fs.existsSync(AUTH_FOLDER)) { 
+            fs.mkdirSync(AUTH_FOLDER); 
         }
 
-        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
         
         sock = makeWASocket({
             auth: state,
-            printQRInTerminal: true,
+            printQRInTerminal: false, // Desligado para não poluir log
             logger: pino({ level: 'silent' }), 
-            browser: ["Mac OS", "Chrome", "10.15.7"], 
+            browser: ["SalesBot", "Chrome", "1.0.0"], 
             connectTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
             emitOwnEvents: false,
-            retryRequestDelayMs: 5000 
+            retryRequestDelayMs: 2000 
         });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log('[Baileys] Novo QR Code gerado e disponível.');
+                console.log('[Baileys] Novo QR Code recebido.');
                 qrCodeBase64 = await qrcode.toDataURL(qr);
                 connectionStatus = 'qrcode_ready';
             }
@@ -75,32 +97,24 @@ const startWhatsApp = async () => {
             if (connection === 'close') {
                 const statusCode = (lastDisconnect?.error)?.output?.statusCode;
                 const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-                const isForbidden = statusCode === 403; 
                 
-                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}. LoggedOut: ${isLoggedOut}`);
+                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}`);
                 
                 connectionStatus = 'disconnected';
                 qrCodeBase64 = null;
 
-                if (isLoggedOut || isForbidden) {
-                    console.log('[Baileys] Sessão inválida/banida. Limpando arquivos...');
-                    try {
-                       sock = null;
-                       if (fs.existsSync('auth_info_baileys')) fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                    } catch (e) {}
-                    
-                    // Permite reconexão limpa
+                // Se foi logout ou erro de permissão (403), limpa tudo para gerar novo QR
+                if (isLoggedOut || statusCode === 403) {
+                    console.log('[Baileys] Sessão inválida. Reiniciando limpo...');
+                    sock = null;
+                    await clearAuthFolder();
                     isReconnecting = false;
-                    setTimeout(() => startWhatsApp(), 2000);
+                    setTimeout(() => startWhatsApp(), 1000);
                 } else if (shouldReconnect) {
-                    console.log('[Baileys] Tentando reconectar em 3s...');
-                    // Libera a trava para permitir que o próximo startWhatsApp funcione (ou chama ele direto)
-                    // Importante: Não setar isReconnecting=false aqui se formos chamar startWhatsApp recursivamente logo em seguida
-                    // Mas como usamos setTimeout, podemos resetar a flag dentro do timeout ou confiar na logica de start
+                    console.log('[Baileys] Reconectando em 2s...');
                     isReconnecting = false; 
-                    setTimeout(() => startWhatsApp(), 3000);
+                    setTimeout(() => startWhatsApp(), 2000);
                 } else {
-                    console.log('[Baileys] Reconexão automática desativada.');
                     isReconnecting = false;
                 }
             } else if (connection === 'open') {
@@ -124,7 +138,6 @@ const startWhatsApp = async () => {
                         console.log(`[Baileys] Msg de ${remoteJid}: ${text}`);
                         
                         try {
-                            // Humanização básica
                             await sock.readMessages([msg.key]);
                             await sock.sendPresenceUpdate('composing', remoteJid);
                             
@@ -144,15 +157,14 @@ const startWhatsApp = async () => {
     } catch (err) {
         console.error('[Baileys] Falha crítica no start:', err);
         connectionStatus = 'error';
-        isReconnecting = false; // Libera trava em caso de erro
+        isReconnecting = false;
     }
 };
 
-// Início automático
 setTimeout(startWhatsApp, 1000);
 
 // ==================================================================================
-// 1. CONFIGURAÇÃO SQL & AI HÍBRIDA (GROQ OU GEMINI)
+// 1. CONFIGURAÇÃO SQL & AI HÍBRIDA
 // ==================================================================================
 
 const sqlConfig = {
@@ -194,7 +206,7 @@ PROTOCOLO DE SEGURANÇA (ANTI-ALUCINAÇÃO):
 7. IDENTIFICAÇÃO: Se o usuário iniciar a conversa informando apenas um NÚMERO ou um NOME, assuma que é a identificação do vendedor. Use a tool 'get_sales_team' para confirmar quem é. Se encontrar, cumprimente pelo nome e pergunte como pode ajudar (ex: "Quer ver sua rota ou vendas?").
 `;
 
-// Tools Schema e SQL Queries mantidos iguais
+// Tools Schema (Mantido)
 const toolsSchema = [
     { name: "get_sales_team", description: "Consulta funcionários/vendedores.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
     { name: "get_customer_base", description: "Busca cadastro de clientes pelo nome.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
@@ -214,8 +226,6 @@ const SQL_QUERIES = {
 const BASE_CTE = `WITH pedidos_filtrados AS ( SELECT ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD, ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTV, ibetpdd.CODORIPDD, ibetpdd.codvec, ibetpdd.CODMTCEPG FROM flexx10071188.dbo.ibetpdd WHERE DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate AND INDSTUMVTPDD IN (1, 4) AND NUMDOCPDD <> 0 AND CODCNDPGTRVD NOT IN (9998, 9999) )`;
 
 async function executeToolCall(name, args) {
-    // ... Implementação mantida inalterada ...
-    // (Código da função executeToolCall é idêntico ao anterior, ocultado para brevidade)
     console.log(`[ToolExecutor] Executing ${name}`, args);
     let pool;
     try {
@@ -232,40 +242,34 @@ async function executeToolCall(name, args) {
         if (name === 'get_customer_base') {
             request.input('search', sql.VarChar, `%${args.searchTerm}%`);
             const result = await request.query(`SELECT TOP 10 CONCAT(CODCET, ' - ', NOMRAZSCLCET) as nome FROM flexx10071188.dbo.IBETCET WHERE NOMRAZSCLCET LIKE @search OR CODCET = TRY_CAST(@search AS INT)`);
-            if (result.recordset.length === 0) return { message: "Nenhum cliente encontrado com esse nome ou código." };
-            return result.recordset;
+            return result.recordset.length === 0 ? { message: "Nenhum cliente encontrado." } : result.recordset;
         }
         if (name === 'get_scheduled_visits') {
             const date = args.date || new Date().toISOString().split('T')[0];
             const scope = args.scope || 'day'; 
             request.input('targetDate', sql.Date, date);
             request.input('sellerId', sql.Int, args.sellerId);
-            let finalQuery = SQL_QUERIES.VISITS_QUERY; // Já inclui o filtro de data fixado
-            const result = await request.query(finalQuery);
+            const result = await request.query(SQL_QUERIES.VISITS_QUERY);
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
             const listaSimples = result.recordset.filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true).slice(0, 50).map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
-            if (result.recordset.length > 50) listaSimples.push(`... e mais ${result.recordset.length - 50} clientes.`);
-            return { ai_response: { escopo_analise: scope === 'day' ? `Rota do Dia ${date}` : `Base Prevista Mês Inteiro`, total_clientes_base: total, ja_compraram_mes: positivados, pendentes_cobertura: pendentes, LISTA_CLIENTES: listaSimples, status_geral: `Na base prevista (${scope}), ${positivados} de ${total} clientes já foram positivados. Faltam ${pendentes}.` }, frontend_data: result.recordset, debug_meta: { period: scope === 'day' ? date : 'Mês Atual', filters: [`Vendedor ${args.sellerId}`], sqlLogic: scope === 'month' ? 'Base Mensal' : 'Rota Diária' } };
+            return { ai_response: { resumo: `Rota ${date} (${scope})`, total: total, positivados: positivados, pendentes: pendentes, lista: listaSimples }, frontend_data: result.recordset };
         }
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            if (result.recordset.length === 0) return { message: "Nenhuma oportunidade de Gap detectada. O cliente comprou regularmente ou não tem histórico recente." };
-            return { ai_response: { oportunidades_encontradas: result.recordset.length, lista_produtos_sugeridos: result.recordset.map(p => p.descricao) }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 3 meses vs Atual', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Gap Analysis' } };
+            return result.recordset.length === 0 ? { message: "Sem Gap detectado." } : { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
         }
         if (name === 'get_client_history') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.HISTORY_QUERY);
-            if (result.recordset.length === 0) return { message: "Este cliente NÃO possui compras nos últimos 6 meses. Não ofereça produtos baseados em histórico." };
-            return { ai_response: { perfil: "Compras Recentes (6 meses)", produtos_comprados: result.recordset }, frontend_data: result.recordset, debug_meta: { period: 'Últimos 6 meses', filters: [`Cliente ${args.customerId}`], sqlLogic: 'Histórico' } };
+            return result.recordset.length === 0 ? { message: "Sem histórico recente." } : { historico: result.recordset };
         }
         if (name === 'query_sales_data') {
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
-            const d = new Date();
-            d.setDate(d.getDate() - 30);
+            const d = new Date(); d.setDate(d.getDate() - 30);
             const defaultStart = d.toISOString().split('T')[0];
             request.input('startDate', sql.Date, args.startDate || defaultStart);
             request.input('endDate', sql.Date, args.endDate || defaultEnd);
@@ -344,9 +348,9 @@ async function executeToolCall(name, args) {
 }
 
 async function runChatAgent(userMessage, history = []) {
-   // ... Mantido igual ao anterior ...
-   // Oculto para brevidade
    if (!process.env.API_KEY) throw new Error("API Key inválida.");
+
+    // Correção de Roles para API Groq/Llama
     const contextMessages = [
         { role: "system", content: SYSTEM_PROMPT },
         ...history.map(m => {
@@ -354,10 +358,16 @@ async function runChatAgent(userMessage, history = []) {
             if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
                  text = m.parts[0].text;
             }
-            return { role: m.role === 'model' ? 'assistant' : 'user', content: text || "" };
+            // Força conversão: 'model' virou 'assistant', 'ai' vira 'assistant', 'system' mantido
+            let role = 'user';
+            if (m.role === 'model' || m.role === 'ai' || m.role === 'assistant') role = 'assistant';
+            if (m.role === 'system') role = 'system';
+            
+            return { role: role, content: text || "" };
         }),
         { role: "user", content: userMessage }
     ];
+
     try {
         if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
         else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
@@ -367,30 +377,32 @@ async function runChatAgent(userMessage, history = []) {
 
 async function runGroqAgent(messages) {
     const groqTools = toolsSchema.map(t => ({ type: "function", function: t }));
+    // Filtra mensagens para garantir que não haja erros de sistema
+    const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
+    
     let completion = await groqClient.chat.completions.create({
-        messages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
+        messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
     });
     let message = completion.choices[0].message;
     let dataPayload = null;
     if (message.tool_calls) {
-        messages.push(message);
+        validMessages.push(message);
         for (const tool of message.tool_calls) {
             const result = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
             if (result.frontend_data) {
                  dataPayload = { samples: result.frontend_data, debugMeta: result.debug_meta, totalCoverage: result.ai_response?.resumo?.cobertura_clientes_unicos };
-                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
+                 validMessages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
             } else {
-                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
+                 validMessages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
             }
         }
-        completion = await groqClient.chat.completions.create({ messages, model: "llama-3.3-70b-versatile" });
+        completion = await groqClient.chat.completions.create({ messages: validMessages, model: "llama-3.3-70b-versatile" });
         message = completion.choices[0].message;
     }
     return { text: message.content, data: dataPayload };
 }
 
 async function runGoogleAgent(messages) {
-    // ... Mantido igual ao anterior ...
     try {
         const model = googleClient.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
         const googleTools = [{ functionDeclarations: toolsSchema }];
@@ -436,28 +448,19 @@ app.post('/api/v1/whatsapp/logout', async (req, res) => {
     try {
         shouldReconnect = false;
         
-        // 1. Força fechamento do socket
         if (sock) { 
             try { sock.end(new Error('Logout manual')); } catch (e) {}
             sock = null; 
         }
         
-        // 2. Aguarda liberação
         await new Promise(r => setTimeout(r, 1000));
         
-        // 3. Limpa arquivos
-        if (fs.existsSync('auth_info_baileys')) { 
-            fs.rmSync('auth_info_baileys', { recursive: true, force: true }); 
-            console.log('[API] Pasta de credenciais apagada.');
-        }
+        // Chama a função robusta de limpeza
+        await clearAuthFolder();
         
         connectionStatus = 'disconnected';
-        
-        // 4. DESTROLLA O SISTEMA (Importante!)
-        // Desbloqueia a variável isReconnecting que pode estar travada como 'true'
         isReconnecting = false; 
         
-        // 5. Reinicia em breve
         setTimeout(() => { 
             console.log('[API] Reiniciando startWhatsApp após logout...');
             shouldReconnect = true; 
@@ -472,7 +475,6 @@ app.post('/api/v1/whatsapp/logout', async (req, res) => {
 });
 
 app.post('/api/v1/chat', async (req, res) => {
-   // ... Mantido igual ...
     try {
         const { message, history } = req.body;
         const response = await runChatAgent(message, history);
@@ -497,6 +499,12 @@ app.post('/api/v1/chat', async (req, res) => {
         }
         res.json({ text: response.text, data: formattedData });
     } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/v1/query', async (req, res) => {
+    const result = await executeToolCall('query_sales_data', req.body);
+    // Endpoint simplificado para o frontend direto
+    res.json(result.frontend_data); 
 });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V4 Hybrid (Groq/Google) running on ${PORT}`));

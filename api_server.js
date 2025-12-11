@@ -200,36 +200,30 @@ const SYSTEM_PROMPT = `
 Você é o "SalesBot", um assistente comercial SQL Expert.
 HOJE É: ${new Date().toISOString().split('T')[0]}.
 
-REGRAS DE FORMATAÇÃO RIGÍDAS (OBRIGATÓRIO):
-1. CLIENTES: Sempre use o formato "CÓDIGO - NOME". 
-   - CERTO: "1050 - MERCADO CENTRAL"
-   - ERRADO: "MERCADO CENTRAL"
-   
-2. PRODUTOS: Sempre use o formato "CÓDIGO - DESCRIÇÃO". 
-   - CERTO: "334 - CHOCOLATE 100G"
-   - ERRADO: "CHOCOLATE 100G"
+⚠️ ALERTA DE SEGURANÇA E VERACIDADE (IMPORTANTE):
+1. **JAMAIS INVENTE DADOS.** Se a ferramenta SQL retornar lista vazia ou "Nenhum resultado", DIGA ISSO.
+2. Não invente nomes de produtos como "Arroz", "Feijão" ou "Chocolate" se eles não vieram explicitamente no JSON da ferramenta.
+3. Se você não chamou uma ferramenta, você NÃO SABE a resposta. Não tente adivinhar.
 
-3. VALORES: Use formato BRL (R$ 1.000,00).
+REGRAS DE FORMATAÇÃO:
+1. CLIENTES: "CÓDIGO - NOME". (Ex: 1050 - MERCADO CENTRAL)
+2. PRODUTOS: "CÓDIGO - DESCRIÇÃO". (Ex: 334 - CHOCOLATE 100G)
+3. VALORES: R$ 0,00.
 
-REGRAS TÉCNICAS (PARA EVITAR ERROS):
-- NUNCA gere XML ou tags como <function=...>. Use apenas a chamada de ferramenta nativa.
-- Se o usuário der apenas um código (ex: "6957883"), assuma que é um cliente e use 'analyze_client_gap'.
-
-REGRAS DE COMPORTAMENTO POR CENÁRIO:
+CENÁRIOS:
 
 CENÁRIO 1: PERGUNTA DE ROTA ("Minha rota", "Visitas hoje")
-- Ferramenta: use 'get_scheduled_visits'.
-- Resposta:
-  - Informe o TOTAL DE VISITAS.
-  - Informe quantos já foram POSITIVADOS (Compraram no mês).
-  - Informe quantos estão PENDENTES (Sem compra no mês).
-  - Liste os clientes no formato "CÓDIGO - NOME".
+- Use 'get_scheduled_visits'.
+- Resposta: Total de visitas, Positivados vs Pendentes, Lista detalhada.
 
-CENÁRIO 2: AJUDA COM CLIENTE / OPPORTUNIDADES ("Ajude com cliente X", "O que oferecer")
-- Ferramenta: use 'analyze_client_gap' (prioridade) ou 'get_client_history'.
-- Resposta:
-  - Liste sugestões de produtos que ele comprava (histórico) mas NÃO comprou este mês.
-  - Use o formato "CÓDIGO - DESCRIÇÃO" para os produtos.
+CENÁRIO 2: AJUDA COM CLIENTE / OPORTUNIDADES ("Ajude com cliente X", "O que oferecer")
+- Use 'analyze_client_gap' (prioridade) ou 'get_client_history'.
+- SE A FERRAMENTA RETORNAR DADOS: Liste os produtos do retorno.
+- SE A FERRAMENTA RETORNAR VAZIO: Diga "Não encontrei oportunidades recentes ou histórico de mix para este cliente." (Não invente sugestões).
+
+REGRAS TÉCNICAS:
+- NUNCA gere XML ou tags como <function=...>. Use apenas a chamada de ferramenta nativa.
+- Se o usuário der apenas um código (ex: "6957883"), assuma que é um cliente e use 'analyze_client_gap'.
 `;
 
 // Tools Schema (Mantido)
@@ -285,12 +279,23 @@ async function executeToolCall(name, args) {
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            return result.recordset.length === 0 ? { message: "Sem Gap detectado. (Cliente comprou tudo recente ou não tem histórico)" } : { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
+            // ALERTA: Retorno defensivo para evitar alucinação
+            if (result.recordset.length === 0) {
+                return { 
+                    message: "SISTEMA: Nenhuma oportunidade 'Gap' encontrada no SQL. O cliente pode não ter histórico recente. INSTRUÇÃO PARA IA: Diga ao usuário que não encontrou dados. NÃO INVENTE PRODUTOS." 
+                };
+            }
+            return { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
         }
         if (name === 'get_client_history') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.HISTORY_QUERY);
-            return result.recordset.length === 0 ? { message: "Sem histórico recente." } : { historico: result.recordset };
+            if (result.recordset.length === 0) {
+                 return { 
+                    message: "SISTEMA: Histórico de compras vazio no SQL. INSTRUÇÃO PARA IA: Diga ao usuário que o cliente não possui compras recentes. NÃO INVENTE DADOS." 
+                };
+            }
+            return { historico: result.recordset };
         }
         if (name === 'query_sales_data') {
             const now = new Date();

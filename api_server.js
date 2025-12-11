@@ -204,13 +204,16 @@ REGRAS DE FORMATAÇÃO RIGÍDAS (OBRIGATÓRIO):
 1. CLIENTES: Sempre use o formato "CÓDIGO - NOME". 
    - CERTO: "1050 - MERCADO CENTRAL"
    - ERRADO: "MERCADO CENTRAL"
-   - ERRADO: "1050 MERCADO CENTRAL"
    
 2. PRODUTOS: Sempre use o formato "CÓDIGO - DESCRIÇÃO". 
    - CERTO: "334 - CHOCOLATE 100G"
    - ERRADO: "CHOCOLATE 100G"
 
 3. VALORES: Use formato BRL (R$ 1.000,00).
+
+REGRAS TÉCNICAS (PARA EVITAR ERROS):
+- NUNCA gere XML ou tags como <function=...>. Use apenas a chamada de ferramenta nativa.
+- Se o usuário der apenas um código (ex: "6957883"), assuma que é um cliente e use 'analyze_client_gap'.
 
 REGRAS DE COMPORTAMENTO POR CENÁRIO:
 
@@ -221,18 +224,12 @@ CENÁRIO 1: PERGUNTA DE ROTA ("Minha rota", "Visitas hoje")
   - Informe quantos já foram POSITIVADOS (Compraram no mês).
   - Informe quantos estão PENDENTES (Sem compra no mês).
   - Liste os clientes no formato "CÓDIGO - NOME".
-  - PROIBIDO: Nunca diga "confirmou visita" ou "agendou".
 
 CENÁRIO 2: AJUDA COM CLIENTE / OPPORTUNIDADES ("Ajude com cliente X", "O que oferecer")
 - Ferramenta: use 'analyze_client_gap' (prioridade) ou 'get_client_history'.
 - Resposta:
   - Liste sugestões de produtos que ele comprava (histórico) mas NÃO comprou este mês.
   - Use o formato "CÓDIGO - DESCRIÇÃO" para os produtos.
-  - Se não houver gap, liste os mais comprados do histórico.
-
-INSTRUÇÕES GERAIS:
-- Se precisar de dados, chame a ferramenta via 'tool_calls'. NÃO INVENTE DADOS.
-- Responda de forma curta e direta (estilo WhatsApp).
 `;
 
 // Tools Schema (Mantido)
@@ -436,87 +433,61 @@ async function runGroqAgent(messages) {
     
     // --- FALLBACK ROBUSTO: DETECTAR ALUCINAÇÕES DE FUNÇÃO ---
     // O modelo pode retornar o JSON puro ou algo como "get_scheduled_visits{...}" como TEXTO.
-    // Precisamos interceptar isso e transformar em uma tool_call válida.
-
+    // O modelo Llama 3 adora retornar: <function=analyze_client_gap({"customerId": 123})</function>
+    
     if (!message.tool_calls && message.content) {
         const content = message.content.trim();
         
-        // 1. Regex para "NomeDaFuncao{...JSON...}"
-        // Captura o nome da função (grupo 1) e o JSON (grupo 3)
-        // Aceita sinal de igual opcional (grupo 2) que o Llama adora colocar errado
-        const toolNames = toolsSchema.map(t => t.name).join('|');
+        let fnName = null;
+        let fnArgs = null;
+
+        // Estratégia 1: Regex Padrão de XML <function=NAME>ARGS</function>
+        const xmlMatch = content.match(/<function=([a-zA-Z0-9_]+)(?:.*?)>([\s\S]*?)<\/function>/i);
         
-        // Regex para XML Style (O Erro 400 reportado: <function=Name>Args</function>)
-        // Aceita <function=Nome> ou <function=Nome=>
-        const xmlRegex = new RegExp(`<function=(${toolNames})(=?)>([\\s\\S]*?)</function>`, 'i');
-        const matchXml = content.match(xmlRegex);
+        // Estratégia 2: Regex "Loose" para formatos quebrados
+        // Ex: <function=analyze_client_gap({"customerId": 6957883})</function>
+        // Procura "function=NOME" e depois captura o primeiro bloco de JSON "{...}"
+        if (!xmlMatch) {
+            const nameMatch = content.match(/function=([a-zA-Z0-9_]+)/i);
+            const jsonMatch = content.match(/(\{[\s\S]*\})/); // Pega do primeiro { ao último }
 
-        // Regex Texto plano: func{args} ou func={args}
-        const textRegex = new RegExp(`(${toolNames})(=?)\\s*(\\{[\\s\\S]*\\})`, 'i');
-        const matchText = content.match(textRegex);
-
-        if (matchXml) {
-            const fnName = matchXml[1];
-            let fnArgs = matchXml[3].trim();
-            console.log(`[Groq] Fallback: Detectado formato XML para '${fnName}'.`);
-            
-            try {
-                // Tenta limpar artifacts comuns
-                if (fnArgs.startsWith('[') && fnArgs.endsWith(']')) fnArgs = fnArgs.slice(1, -1);
-                // Remove aspas extras se houver wrapper
-                if (fnArgs.startsWith('"') && fnArgs.endsWith('"')) fnArgs = fnArgs.slice(1, -1);
-                
-                // Sanitização (aspas simples para duplas)
-                const sanitizedArgs = fnArgs.includes("'") && !fnArgs.includes('"') ? fnArgs.replace(/'/g, '"') : fnArgs;
-                
-                // Valida JSON
-                JSON.parse(sanitizedArgs);
-                
-                message.tool_calls = [{
-                    id: 'call_fallback_xml_' + Date.now(),
-                    type: 'function',
-                    function: { name: fnName, arguments: sanitizedArgs }
-                }];
-                message.content = null; // Limpa texto para não exibir lixo XML
-            } catch (e) {
-                console.warn("[Groq] Falha ao parsear XML args:", e.message);
+            if (nameMatch && jsonMatch) {
+                console.log(`[Groq] Fallback Loose: Recuperado '${nameMatch[1]}' com JSON.`);
+                fnName = nameMatch[1];
+                fnArgs = jsonMatch[1];
             }
+        } else {
+             console.log(`[Groq] Fallback XML: Recuperado '${xmlMatch[1]}'.`);
+             fnName = xmlMatch[1];
+             fnArgs = xmlMatch[2];
         }
-        else if (matchText) {
-            const fnName = matchText[1];
-            const fnArgs = matchText[3];
-            console.log(`[Groq] Fallback: Detectada função textual '${fnName}'. Convertendo para ToolCall.`);
-            
-            try {
-                const sanitizedArgs = fnArgs.includes("'") && !fnArgs.includes('"') ? fnArgs.replace(/'/g, '"') : fnArgs;
-                JSON.parse(sanitizedArgs);
+
+        // Se encontrou algo via Fallback
+        if (fnName && fnArgs) {
+             try {
+                // Limpeza Extra: Llama 3 as vezes coloca parenteses em volta do JSON
+                let cleanArgs = fnArgs.trim();
+                if (cleanArgs.startsWith('(') && cleanArgs.endsWith(')')) {
+                    cleanArgs = cleanArgs.slice(1, -1);
+                }
+
+                // Normaliza aspas simples para duplas
+                if (cleanArgs.includes("'") && !cleanArgs.includes('"')) {
+                    cleanArgs = cleanArgs.replace(/'/g, '"');
+                }
+
+                // Tenta parsear
+                JSON.parse(cleanArgs);
+
                 message.tool_calls = [{
                     id: 'call_fallback_' + Date.now(),
                     type: 'function',
-                    function: { name: fnName, arguments: sanitizedArgs }
+                    function: { name: fnName, arguments: cleanArgs }
                 }];
-                message.content = null; 
+                message.content = null; // Remove o lixo visual
             } catch (e) {
-                console.warn("[Groq] Falha ao parsear JSON do fallback (Regex):", e.message);
+                console.warn("[Groq] Falha ao parsear argumentos do Fallback:", e.message);
             }
-        } 
-        // 3. Fallback para JSON puro {"function": "nome", ...} (Padrão antigo de alguns prompts)
-        else if (content.startsWith('{') && content.includes('"function"')) {
-             try {
-                const potentialJson = JSON.parse(content);
-                if (potentialJson.function && potentialJson.parameters) {
-                    console.log('[Groq] Fallback: Detectado JSON puro de função.');
-                    message.tool_calls = [{
-                        id: 'call_fallback_json_' + Date.now(),
-                        type: 'function',
-                        function: {
-                            name: potentialJson.function,
-                            arguments: JSON.stringify(potentialJson.parameters)
-                        }
-                    }];
-                    message.content = null;
-                }
-            } catch (e) { /* ignore */ }
         }
     }
     // --------------------------------------------------------

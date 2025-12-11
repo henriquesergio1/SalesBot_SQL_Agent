@@ -83,7 +83,7 @@ const startWhatsApp = async () => {
             auth: state,
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }), 
-            browser: ["Mac OS", "Chrome", "10.15.7"], 
+            browser: ["SalesBot", "Chrome", "1.0.0"], 
             connectTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
@@ -149,7 +149,8 @@ const startWhatsApp = async () => {
                             const humanDelay = Math.floor(Math.random() * 2000) + 1000;
                             await delay(humanDelay);
 
-                            const response = await runChatAgent(text); 
+                            // WhatsApp não manda histórico, então array vazio
+                            const response = await runChatAgent(text, []); 
                             
                             await sock.sendMessage(remoteJid, { text: response.text });
                             await sock.sendPresenceUpdate('paused', remoteJid);
@@ -249,7 +250,6 @@ async function executeToolCall(name, args) {
             return result.recordset.length === 0 ? { message: "Sem histórico recente." } : { historico: result.recordset };
         }
         if (name === 'query_sales_data') {
-            // ... (Lógica de query mantida igual) ...
             const now = new Date();
             const defaultEnd = now.toISOString().split('T')[0];
             const d = new Date(); d.setDate(d.getDate() - 30);
@@ -312,7 +312,11 @@ async function runChatAgent(userMessage, history = []) {
         if (aiProvider === 'groq' && groqClient) {
             const messages = [
                 { role: "system", content: SYSTEM_PROMPT },
-                ...history.map(m => ({ role: m.role, content: m.parts ? m.parts[0].text : m.content })),
+                // CORREÇÃO CRÍTICA: Mapeia roles 'model' (frontend) para 'assistant' (groq)
+                ...history.map(m => ({ 
+                    role: (m.role === 'model' || m.role === 'ai') ? 'assistant' : 'user', 
+                    content: m.parts ? m.parts[0].text : (m.content || "") 
+                })),
                 { role: "user", content: userMessage }
             ];
 
@@ -350,7 +354,6 @@ async function runChatAgent(userMessage, history = []) {
             }
 
         } else if (aiProvider === 'google' && googleClient) {
-            // ... (Implementação Google simplificada para economizar espaço, segue lógica similar) ...
             finalResponse = "Modo Google Ativado (Implementação Simplificada)";
         }
 
@@ -366,9 +369,14 @@ async function runChatAgent(userMessage, history = []) {
 // 3. ROTAS EXPRESS (API ENDPOINTS)
 // ==================================================================================
 
-app.get('/api/v1/health', (req, res) => {
+const healthHandler = (req, res) => {
     res.json({ status: 'online', sql: 'unknown', ai: aiProvider });
-});
+};
+
+// Rotas com e sem prefixo para garantir funcionamento mesmo com variações de proxy Nginx
+app.get('/api/v1/health', healthHandler);
+app.get('/health', healthHandler); // Fallback para /health
+app.get('/v1/health', healthHandler); // Fallback para /v1/health
 
 app.get('/api/v1/whatsapp/status', (req, res) => {
     res.json({ status: connectionStatus });
@@ -404,7 +412,6 @@ app.post('/api/v1/chat', async (req, res) => {
 
 app.post('/api/v1/query', async (req, res) => {
     const result = await executeToolCall('query_sales_data', req.body);
-    // Adaptação para o Dashboard esperar formato específico
     const summary = {
         totalRevenue: result.ai_response?.total || 0,
         totalOrders: 0,

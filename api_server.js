@@ -8,6 +8,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@w
 import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
+import path from 'path';
 
 const app = express();
 app.use(express.json());
@@ -24,50 +25,79 @@ let connectionStatus = 'disconnected';
 let shouldReconnect = true;
 let isReconnecting = false;
 
-const startWhatsApp = async () => {
-    console.log(`[Baileys] startWhatsApp solicitado. Bloqueio atual: ${isReconnecting}`);
+const AUTH_FOLDER = 'auth_info_baileys';
+
+// Função robusta para limpar pasta de sessão
+const clearAuthFolder = async () => {
+    if (!fs.existsSync(AUTH_FOLDER)) return true;
+
+    console.log('[Baileys] Tentando limpar pasta de sessão...');
+    const maxRetries = 3;
     
-    if (isReconnecting) {
-        console.log('[Baileys] Tentativa de conexão ignorada (já existe um processo em andamento).');
-        return;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+            console.log('[Baileys] Pasta limpa com sucesso.');
+            return true;
+        } catch (error) {
+            console.warn(`[Baileys] Tentativa ${i+1} de limpar falhou (${error.code})...`);
+            await new Promise(r => setTimeout(r, 1000));
+        }
     }
+
+    // Se falhar exclusão, tenta renomear para "lixo" para liberar o nome oficial
+    try {
+        const trashName = `${AUTH_FOLDER}_trash_${Date.now()}`;
+        fs.renameSync(AUTH_FOLDER, trashName);
+        console.log(`[Baileys] Pasta renomeada para ${trashName} (fallback).`);
+        return true;
+    } catch (e) {
+        console.error('[Baileys] Falha crítica ao limpar sessão:', e);
+        return false;
+    }
+};
+
+const startWhatsApp = async () => {
+    console.log(`[Baileys] startWhatsApp solicitado. Reconnecting: ${isReconnecting}`);
+    
+    if (isReconnecting) return;
     isReconnecting = true;
 
     try {
+        // Garante que o socket anterior esteja fechado
         if (sock) {
             try { sock.end(undefined); } catch (e) {}
             sock = null;
         }
-        
+
         console.log('[Baileys] Iniciando novo processo de conexão...');
         connectionStatus = 'connecting';
         qrCodeBase64 = null;
         shouldReconnect = true;
         
-        if (!fs.existsSync('auth_info_baileys')) { 
-            console.log('[Baileys] Criando pasta de autenticação...');
-            fs.mkdirSync('auth_info_baileys'); 
+        if (!fs.existsSync(AUTH_FOLDER)) { 
+            fs.mkdirSync(AUTH_FOLDER); 
         }
 
-        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
         
         sock = makeWASocket({
             auth: state,
-            printQRInTerminal: true,
+            printQRInTerminal: false, // Desativado para evitar warnings
             logger: pino({ level: 'silent' }), 
             browser: ["Mac OS", "Chrome", "10.15.7"], 
             connectTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
             emitOwnEvents: false,
-            retryRequestDelayMs: 5000 
+            retryRequestDelayMs: 2000 
         });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log('[Baileys] Novo QR Code gerado e disponível.');
+                console.log('[Baileys] Novo QR Code recebido.');
                 qrCodeBase64 = await qrcode.toDataURL(qr);
                 connectionStatus = 'qrcode_ready';
             }
@@ -77,30 +107,23 @@ const startWhatsApp = async () => {
                 const isLoggedOut = statusCode === DisconnectReason.loggedOut;
                 const isForbidden = statusCode === 403; 
                 
-                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}. LoggedOut: ${isLoggedOut}`);
+                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}`);
                 
                 connectionStatus = 'disconnected';
                 qrCodeBase64 = null;
 
                 if (isLoggedOut || isForbidden) {
-                    console.log('[Baileys] Sessão inválida/banida. Limpando arquivos...');
-                    try {
-                       sock = null;
-                       if (fs.existsSync('auth_info_baileys')) fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                    } catch (e) {}
-                    
-                    // Permite reconexão limpa
+                    console.log('[Baileys] Sessão inválida. Reiniciando limpo...');
+                    sock = null;
+                    await clearAuthFolder();
                     isReconnecting = false;
-                    setTimeout(() => startWhatsApp(), 2000);
+                    setTimeout(() => startWhatsApp(), 1000);
                 } else if (shouldReconnect) {
-                    console.log('[Baileys] Tentando reconectar em 3s...');
-                    // Libera a trava para permitir que o próximo startWhatsApp funcione (ou chama ele direto)
-                    // Importante: Não setar isReconnecting=false aqui se formos chamar startWhatsApp recursivamente logo em seguida
-                    // Mas como usamos setTimeout, podemos resetar a flag dentro do timeout ou confiar na logica de start
+                    console.log('[Baileys] Reconectando em 2s...');
                     isReconnecting = false; 
-                    setTimeout(() => startWhatsApp(), 3000);
+                    setTimeout(() => startWhatsApp(), 2000);
                 } else {
-                    console.log('[Baileys] Reconexão automática desativada.');
+                    console.log('[Baileys] Reconexão automática PAUSADA (Logout manual?).');
                     isReconnecting = false;
                 }
             } else if (connection === 'open') {
@@ -124,7 +147,6 @@ const startWhatsApp = async () => {
                         console.log(`[Baileys] Msg de ${remoteJid}: ${text}`);
                         
                         try {
-                            // Humanização básica
                             await sock.readMessages([msg.key]);
                             await sock.sendPresenceUpdate('composing', remoteJid);
                             
@@ -144,7 +166,7 @@ const startWhatsApp = async () => {
     } catch (err) {
         console.error('[Baileys] Falha crítica no start:', err);
         connectionStatus = 'error';
-        isReconnecting = false; // Libera trava em caso de erro
+        isReconnecting = false;
     }
 };
 
@@ -215,7 +237,6 @@ const BASE_CTE = `WITH pedidos_filtrados AS ( SELECT ibetpdd.DATEMSDOCPDD, ibetp
 
 async function executeToolCall(name, args) {
     // ... Implementação mantida inalterada ...
-    // (Código da função executeToolCall é idêntico ao anterior, ocultado para brevidade)
     console.log(`[ToolExecutor] Executing ${name}`, args);
     let pool;
     try {
@@ -240,7 +261,7 @@ async function executeToolCall(name, args) {
             const scope = args.scope || 'day'; 
             request.input('targetDate', sql.Date, date);
             request.input('sellerId', sql.Int, args.sellerId);
-            let finalQuery = SQL_QUERIES.VISITS_QUERY; // Já inclui o filtro de data fixado
+            let finalQuery = SQL_QUERIES.VISITS_QUERY; 
             const result = await request.query(finalQuery);
             const total = result.recordset.length;
             const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
@@ -342,161 +363,5 @@ async function executeToolCall(name, args) {
         return { error: `Erro SQL: ${sqlErr.message}` };
     }
 }
-
-async function runChatAgent(userMessage, history = []) {
-   // ... Mantido igual ao anterior ...
-   // Oculto para brevidade
-   if (!process.env.API_KEY) throw new Error("API Key inválida.");
-    const contextMessages = [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...history.map(m => {
-            let text = m.content;
-            if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
-                 text = m.parts[0].text;
-            }
-            return { role: m.role === 'model' ? 'assistant' : 'user', content: text || "" };
-        }),
-        { role: "user", content: userMessage }
-    ];
-    try {
-        if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
-        else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
-        else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_) ou Google (AIza)." }; }
-    } catch (e) { return { text: `Erro IA: ${e.message}` }; }
-}
-
-async function runGroqAgent(messages) {
-    const groqTools = toolsSchema.map(t => ({ type: "function", function: t }));
-    let completion = await groqClient.chat.completions.create({
-        messages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
-    });
-    let message = completion.choices[0].message;
-    let dataPayload = null;
-    if (message.tool_calls) {
-        messages.push(message);
-        for (const tool of message.tool_calls) {
-            const result = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
-            if (result.frontend_data) {
-                 dataPayload = { samples: result.frontend_data, debugMeta: result.debug_meta, totalCoverage: result.ai_response?.resumo?.cobertura_clientes_unicos };
-                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
-            } else {
-                 messages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
-            }
-        }
-        completion = await groqClient.chat.completions.create({ messages, model: "llama-3.3-70b-versatile" });
-        message = completion.choices[0].message;
-    }
-    return { text: message.content, data: dataPayload };
-}
-
-async function runGoogleAgent(messages) {
-    // ... Mantido igual ao anterior ...
-    try {
-        const model = googleClient.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
-        const googleTools = [{ functionDeclarations: toolsSchema }];
-        const chat = model.startChat({
-            history: messages.slice(0, -1).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-            systemInstruction: SYSTEM_PROMPT,
-            tools: googleTools
-        });
-        let result = await chat.sendMessage(messages[messages.length - 1].content);
-        let response = result.response;
-        let call = response.functionCalls();
-        let dataPayload = null;
-        if (call && call.length > 0) {
-            const fc = call[0];
-            const toolResult = await executeToolCall(fc.name, fc.args);
-             if (toolResult.frontend_data) {
-                 dataPayload = { samples: toolResult.frontend_data, debugMeta: toolResult.debug_meta, totalCoverage: toolResult.ai_response?.resumo?.cobertura_clientes_unicos };
-            }
-            result = await chat.sendMessage([{ functionResponse: { name: fc.name, response: { result: toolResult.ai_response || toolResult } } }]);
-            response = result.response;
-        }
-        return { text: response.text(), data: dataPayload };
-    } catch (e) {
-        if (e.message.includes('429')) return { text: "⚠️ Limite de cota do Google excedido. Mude para Groq para uso ilimitado." };
-        throw e;
-    }
-}
-
-// Rotas API
-app.get('/api/v1/health', async (req, res) => {
-    try {
-        const pool = await sql.connect(sqlConfig);
-        await pool.request().query('SELECT 1');
-        res.json({ status: 'online', sql: 'connected', ai: aiProvider });
-    } catch (e) { res.json({ status: 'online', sql: 'error', error: e.message }); }
-});
-
-app.get('/api/v1/whatsapp/status', (req, res) => { res.json({ status: connectionStatus }); });
-app.get('/api/v1/whatsapp/qrcode', (req, res) => { if (qrCodeBase64) res.json({ base64: qrCodeBase64 }); else res.status(404).json({ message: "N/A" }); });
-
-app.post('/api/v1/whatsapp/logout', async (req, res) => {
-    console.log('[API] Rota Logout chamada. Forçando desconexão...');
-    try {
-        shouldReconnect = false;
-        
-        // 1. Força fechamento do socket
-        if (sock) { 
-            try { sock.end(new Error('Logout manual')); } catch (e) {}
-            sock = null; 
-        }
-        
-        // 2. Aguarda liberação
-        await new Promise(r => setTimeout(r, 1000));
-        
-        // 3. Limpa arquivos
-        if (fs.existsSync('auth_info_baileys')) { 
-            fs.rmSync('auth_info_baileys', { recursive: true, force: true }); 
-            console.log('[API] Pasta de credenciais apagada.');
-        }
-        
-        connectionStatus = 'disconnected';
-        
-        // 4. DESTROLLA O SISTEMA (Importante!)
-        // Desbloqueia a variável isReconnecting que pode estar travada como 'true'
-        isReconnecting = false; 
-        
-        // 5. Reinicia em breve
-        setTimeout(() => { 
-            console.log('[API] Reiniciando startWhatsApp após logout...');
-            shouldReconnect = true; 
-            startWhatsApp(); 
-        }, 1500);
-
-        res.json({ message: "Resetado com sucesso. Aguarde novo QR Code." });
-    } catch (e) { 
-        console.error('[API] Erro no logout:', e);
-        res.status(500).json({ error: "Falha logout" }); 
-    }
-});
-
-app.post('/api/v1/chat', async (req, res) => {
-   // ... Mantido igual ...
-    try {
-        const { message, history } = req.body;
-        const response = await runChatAgent(message, history);
-        let formattedData = null;
-        if (response.data && response.data.samples) {
-            const rows = response.data.samples;
-            const isVisit = rows[0]?.['data_visita'] !== undefined || rows[0]?.['data_visita_ref'] !== undefined;
-            const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
-            const isHist = rows[0]?.['produto'] !== undefined && rows[0]?.['total_gasto'] !== undefined;
-            formattedData = {
-                totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
-                totalOrders: rows.length,
-                totalCoverage: response.data.totalCoverage,
-                averageTicket: 0,
-                topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
-                byCategory: [],
-                recentTransactions: isVisit || isOpp || isHist ? [] : rows.map((r, i) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
-                visits: isVisit ? rows : [],
-                opportunities: isOpp ? rows : [],
-                debugMeta: response.data.debugMeta 
-            };
-        }
-        res.json({ text: response.text, data: formattedData });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V4 Hybrid (Groq/Google) running on ${PORT}`));

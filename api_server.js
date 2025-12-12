@@ -205,25 +205,22 @@ HOJE É: ${new Date().toISOString().split('T')[0]}.
 2. Não invente nomes de produtos como "Arroz", "Feijão" ou "Chocolate" se eles não vieram explicitamente no JSON da ferramenta.
 3. Se você não chamou uma ferramenta, você NÃO SABE a resposta. Não tente adivinhar.
 
+REGRAS DE CONVERSA:
+1. Se o usuário disser apenas "Oi", "Olá", "Bom dia", responda educadamente e pergunte como ajudar. **NÃO CHAME FERRAMENTAS PARA SAUDAÇÕES.**
+2. Se o usuário perguntar "quais itens", "histórico", "o que comprou", use 'get_client_history' com o ID do cliente que está no contexto.
+
 REGRAS DE FORMATAÇÃO:
-1. CLIENTES: "CÓDIGO - NOME". (Ex: 1050 - MERCADO CENTRAL)
-2. PRODUTOS: "CÓDIGO - DESCRIÇÃO". (Ex: 334 - CHOCOLATE 100G)
+1. CLIENTES: "CÓDIGO - NOME".
+2. PRODUTOS: "CÓDIGO - DESCRIÇÃO".
 3. VALORES: R$ 0,00.
 
 CENÁRIOS:
-
-CENÁRIO 1: PERGUNTA DE ROTA ("Minha rota", "Visitas hoje")
-- Use 'get_scheduled_visits'.
-- Resposta: Total de visitas, Positivados vs Pendentes, Lista detalhada.
-
-CENÁRIO 2: AJUDA COM CLIENTE / OPORTUNIDADES ("Ajude com cliente X", "O que oferecer")
-- Use 'analyze_client_gap' (prioridade) ou 'get_client_history'.
-- SE A FERRAMENTA RETORNAR DADOS: Liste os produtos do retorno.
-- SE A FERRAMENTA RETORNAR VAZIO: Diga "Não encontrei oportunidades recentes ou histórico de mix para este cliente." (Não invente sugestões).
+- PERGUNTA DE ROTA ("Minha rota", "Visitas hoje"): Use 'get_scheduled_visits'.
+- AJUDA COM CLIENTE / OPORTUNIDADES ("O que oferecer"): Use 'analyze_client_gap'.
+- HISTÓRICO ("O que ele compra"): Use 'get_client_history'.
 
 REGRAS TÉCNICAS:
 - NUNCA gere XML ou tags como <function=...>. Use apenas a chamada de ferramenta nativa.
-- Se o usuário der apenas um código (ex: "6957883"), assuma que é um cliente e use 'analyze_client_gap'.
 `;
 
 // Tools Schema (Mantido)
@@ -408,7 +405,13 @@ async function runChatAgent(userMessage, history = []) {
         if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
         else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
         else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_) ou Google (AIza)." }; }
-    } catch (e) { return { text: `Erro IA: ${e.message}` }; }
+    } catch (e) { 
+        // Tratamento amigável para erro 400 do Groq (Malformed)
+        if (e.status === 400 || (e.message && e.message.includes('400'))) {
+             return { text: "Desculpe, tive um erro técnico ao processar sua solicitação. Por favor, tente novamente ou reformule a pergunta." };
+        }
+        return { text: `Erro IA: ${e.message}` }; 
+    }
 }
 
 async function runGroqAgent(messages) {
@@ -451,22 +454,23 @@ async function runGroqAgent(messages) {
         let fnName = null;
         let fnArgs = null;
 
-        // Estratégia UNIVERSAL com Regex "Safe": Pega 'function=' ... nome ... '{' ... '}'
-        // Ignora vírgulas, espaços ou falta de '>' que causaram o Erro 400.
-        // Regex: function= (ignora espaço) (NOME) (ignora tudo até {) ({...})
-        const universalMatch = content.match(/function=\s*([a-zA-Z0-9_]+)[^\{]*(\{[\s\S]*\})/i);
+        // Estratégia 1: Capturar o Nome da Função
+        // Procura "function=" seguido de letras. 
+        // Ignora se tem < antes. Pega até encontrar algo que não seja letra/numero/_
+        const nameMatch = content.match(/(?:<)?function=\s*([a-zA-Z0-9_]+)/i);
 
-        if (universalMatch) {
-            console.log(`[Groq] Fallback Universal: Recuperado '${universalMatch[1]}' com JSON.`);
-            fnName = universalMatch[1];
-            fnArgs = universalMatch[2];
-        } else {
-             // Fallback antigo para formato XML correto
-             const xmlMatch = content.match(/<function=([a-zA-Z0-9_]+)[^>]*>([\s\S]*?)<\/function>/i);
-             if (xmlMatch) {
-                fnName = xmlMatch[1];
-                fnArgs = xmlMatch[2];
-             }
+        if (nameMatch) {
+            fnName = nameMatch[1];
+            
+            // Estratégia 2: Capturar o JSON "Na Marra"
+            // Pega do PRIMEIRO '{' até o ÚLTIMO '}'
+            const startJson = content.indexOf('{');
+            const endJson = content.lastIndexOf('}');
+
+            if (startJson > -1 && endJson > startJson) {
+                fnArgs = content.substring(startJson, endJson + 1);
+                console.log(`[Groq] Fallback Nuclear: Recuperado '${fnName}' e JSON bruto.`);
+            }
         }
 
         // Se encontrou algo via Fallback
@@ -482,6 +486,10 @@ async function runGroqAgent(messages) {
                 if (cleanArgs.includes("'") && !cleanArgs.includes('"')) {
                     cleanArgs = cleanArgs.replace(/'/g, '"');
                 }
+                
+                // Sanitização de chaves sem aspas (Ex: {customerId: 123} -> {"customerId": 123})
+                // Regex: Procura palavra seguida de : que NÃO esteja entre aspas
+                cleanArgs = cleanArgs.replace(/(\w+):/g, '"$1":');
 
                 // Tenta parsear
                 JSON.parse(cleanArgs);
@@ -494,6 +502,7 @@ async function runGroqAgent(messages) {
                 message.content = null; // Remove o lixo visual
             } catch (e) {
                 console.warn("[Groq] Falha ao parsear argumentos do Fallback:", e.message);
+                // Se falhar o parse, não quebramos, apenas deixamos seguir como texto (o modelo vai alucinar no texto, mas não cras ha a API)
             }
         }
     }

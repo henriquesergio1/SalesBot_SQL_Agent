@@ -580,7 +580,7 @@ async function startServer() {
     }
 
     app.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 SalesBot V1.1.9 Full-Stack running on http://localhost:${PORT}`);
+        console.log(`🚀 SalesBot V1.2.0 Full-Stack running on http://localhost:${PORT}`);
         startWhatsApp();
     });
 }

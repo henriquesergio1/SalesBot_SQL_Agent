@@ -3,6 +3,7 @@ import express from 'express';
 import sql from 'mssql';
 import cors from 'cors';
 import Groq from 'groq-sdk'; 
+import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode';
@@ -180,6 +181,7 @@ const apiKey = process.env.API_KEY;
 
 let aiProvider = 'unknown';
 let groqClient = null;
+let xaiClient = null;
 let googleClient = null;
 
 if (!apiKey) {
@@ -188,6 +190,10 @@ if (!apiKey) {
     console.log('[AI] Detectada chave GROQ. Usando Llama 3.');
     aiProvider = 'groq';
     groqClient = new Groq({ apiKey: apiKey });
+} else if (apiKey.startsWith('xai-')) {
+    console.log('[AI] Detectada chave xAI. Usando Grok.');
+    aiProvider = 'xai';
+    xaiClient = new OpenAI({ apiKey: apiKey, baseURL: 'https://api.x.ai/v1' });
 } else if (apiKey.startsWith('AIza')) {
     console.log('[AI] Detectada chave GOOGLE. Usando Gemini 2.0 Flash.');
     aiProvider = 'google';
@@ -403,8 +409,9 @@ async function runChatAgent(userMessage, history = []) {
 
     try {
         if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
+        else if (aiProvider === 'xai') { return await runXaiAgent(contextMessages); }
         else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
-        else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_) ou Google (AIza)." }; }
+        else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_), xAI (xai-) ou Google (AIza)." }; }
     } catch (e) { 
         // Tratamento amigável para erro 400 do Groq (Malformed)
         if (e.status === 400 || (e.message && e.message.includes('400'))) {
@@ -412,6 +419,35 @@ async function runChatAgent(userMessage, history = []) {
         }
         return { text: `Erro IA: ${e.message}` }; 
     }
+}
+
+async function runXaiAgent(messages) {
+    if (!xaiClient) return { text: "xAI não configurado." };
+    const xaiTools = toolsSchema.map(t => ({ type: "function", function: t }));
+    const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
+    
+    const completion = await xaiClient.chat.completions.create({
+        messages: validMessages, model: "grok-beta", tools: xaiTools, tool_choice: "auto"
+    });
+    
+    let message = completion.choices[0].message;
+    let dataPayload = null;
+    
+    if (message.tool_calls) {
+        validMessages.push(message);
+        for (const tool of message.tool_calls) {
+            const result = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
+            if (result.frontend_data) {
+                 dataPayload = { samples: result.frontend_data, debugMeta: result.debug_meta, totalCoverage: result.ai_response?.resumo?.cobertura_clientes_unicos };
+                 validMessages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
+            } else {
+                 validMessages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result) });
+            }
+        }
+        const finalCompletion = await xaiClient.chat.completions.create({ messages: validMessages, model: "grok-beta" });
+        message = finalCompletion.choices[0].message;
+    }
+    return { text: message.content, data: dataPayload };
 }
 
 async function runGroqAgent(messages) {
@@ -595,7 +631,7 @@ app.get('/api/v1/health', async (req, res) => {
     try {
         const pool = await sql.connect(sqlConfig);
         await pool.request().query('SELECT 1');
-        res.json({ status: 'online', sql: 'connected', ai: aiProvider });
+        res.json({ status: 'online', sql: 'connected', ai: aiProvider, version: '1.2.0' });
     } catch (e) { res.json({ status: 'online', sql: 'error', error: e.message }); }
 });
 

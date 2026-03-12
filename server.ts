@@ -448,7 +448,7 @@ async function runGoogleAgent(messages: any[]) {
         }));
 
         const response = await googleClient.models.generateContent({
-            model: "gemini-2.0-flash-exp",
+            model: "gemini-3-flash-preview",
             contents: contents,
             config: {
                 systemInstruction: SYSTEM_PROMPT,
@@ -487,7 +487,7 @@ async function runGoogleAgent(messages: any[]) {
             } as any);
 
             const finalResponse = await googleClient.models.generateContent({
-                model: "gemini-2.0-flash-exp",
+                model: "gemini-3-flash-preview",
                 contents: contents,
                 config: {
                     systemInstruction: SYSTEM_PROMPT
@@ -580,7 +580,7 @@ async function startServer() {
     }
 
     app.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 SalesBot V1.1.2 Full-Stack running on http://localhost:${PORT}`);
+        console.log(`🚀 SalesBot V1.1.9 Full-Stack running on http://localhost:${PORT}`);
         startWhatsApp();
     });
 }

@@ -15,7 +15,7 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-const PORT = 3000;
+const PORT = 8080;
 
 // ==================================================================================
 // 0. WHATSAPP NATIVE (BAILEYS)
@@ -702,4 +702,4 @@ app.post('/api/v1/query', async (req, res) => {
     res.json(result.frontend_data); 
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V1.1.9 Hybrid (Groq/Google) running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V1.2.0 Hybrid (Groq/Google) running on ${PORT}`));

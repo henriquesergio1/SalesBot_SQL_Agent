@@ -11,7 +11,7 @@ function App() {
     {
       id: 'welcome',
       role: 'model',
-      content: 'Olá! Sou o SalesBot Broker Rainha. 👑\n\nPara iniciarmos, por favor informe seu **Código de Vendedor** (ex: 101) ou seu **Nome**.',
+      content: 'Olá! Sou o SalesBot Broker Rainha v1.1.1. 👑\n\nPara iniciarmos, por favor informe seu **Código de Vendedor** (ex: 101) ou seu **Nome**.',
       timestamp: new Date()
     }
   ]);
@@ -211,7 +211,7 @@ function App() {
         <div className="bg-white shadow-sm p-4 h-16 flex items-center justify-between border-b px-6">
            <h2 className="font-semibold text-gray-700 flex items-center gap-2">
               <i className="fas fa-chart-line text-slate-800"></i>
-              SalesBot Broker Rainha
+              SalesBot Broker Rainha v1.1.1
            </h2>
            <div className="flex items-center gap-3">
              <div className="flex flex-col items-end">

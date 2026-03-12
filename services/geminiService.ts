@@ -3,11 +3,11 @@ import { SalesSummary, ChatMessage } from "../types";
 // Função para pegar URL da API Automaticamente (Via Proxy Nginx)
 const getApiUrl = () => {
   // Retorna a rota relativa, o browser usa a mesma origem e o Nginx faz o roteamento
-  return `${window.location.origin}/api/v1/chat`;
+  return `/api/v1/chat`;
 };
 
 export const checkBackendHealth = async () => {
-    const healthUrl = `${window.location.origin}/api/v1/health`;
+    const healthUrl = `/api/v1/health`;
     
     try {
         const res = await fetch(healthUrl);

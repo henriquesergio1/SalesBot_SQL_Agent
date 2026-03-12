@@ -4,54 +4,50 @@ import sql from 'mssql';
 import cors from 'cors';
 import Groq from 'groq-sdk'; 
 import { GoogleGenAI } from '@google/genai';
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, delay, WASocket } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import { createServer as createViteServer } from 'vite';
+import { Boom } from '@hapi/boom';
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-const PORT = 8080;
+const PORT = 3000;
 
 // ==================================================================================
 // 0. WHATSAPP NATIVE (BAILEYS)
 // ==================================================================================
-let sock = null;
-let qrCodeBase64 = null;
+let sock: WASocket | null = null;
+let qrCodeBase64: string | null = null;
 let connectionStatus = 'disconnected'; 
 let shouldReconnect = true;
 let isReconnecting = false;
 
 const AUTH_FOLDER = 'auth_info_baileys';
 
-// Função Helper para limpar a sessão de forma robusta (Contorna erro EBUSY)
 const clearAuthFolder = async () => {
     if (!fs.existsSync(AUTH_FOLDER)) return;
-
     console.log('[Baileys] Tentando limpar pasta de sessão...');
     try {
-        // Tenta apagar
         fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
         console.log('[Baileys] Pasta apagada com sucesso.');
-    } catch (e) {
+    } catch (e: any) {
         console.warn(`[Baileys] Erro ao apagar pasta (${e.code}). Tentando renomear (fallback)...`);
         try {
-            // Se falhar (arquivo preso), renomeia para liberar o nome oficial
             const trashName = `${AUTH_FOLDER}_trash_${Date.now()}`;
             fs.renameSync(AUTH_FOLDER, trashName);
             console.log(`[Baileys] Pasta renomeada para ${trashName}. Novo QR Code liberado.`);
-        } catch (e2) {
+        } catch (e2: any) {
             console.error('[Baileys] Falha CRÍTICA ao limpar sessão:', e2.message);
         }
     }
 };
 
 const startWhatsApp = async () => {
-    console.log(`[Baileys] startWhatsApp solicitado. Reconnecting: ${isReconnecting}`);
-    
     if (isReconnecting) return;
     isReconnecting = true;
 
@@ -61,12 +57,10 @@ const startWhatsApp = async () => {
             sock = null;
         }
 
-        console.log('[Baileys] Iniciando novo processo de conexão...');
         connectionStatus = 'connecting';
         qrCodeBase64 = null;
         shouldReconnect = true;
         
-        // Garante que a pasta existe (ou foi recriada após limpeza)
         if (!fs.existsSync(AUTH_FOLDER)) { 
             fs.mkdirSync(AUTH_FOLDER); 
         }
@@ -75,9 +69,9 @@ const startWhatsApp = async () => {
         
         sock = makeWASocket({
             auth: state,
-            printQRInTerminal: false, // Desligado para não poluir log
+            printQRInTerminal: false,
             logger: pino({ level: 'silent' }), 
-            browser: ["SalesBot", "Chrome", "1.0.0"], 
+            browser: ["SalesBot", "Chrome", "1.1.0"], 
             connectTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
@@ -85,33 +79,24 @@ const startWhatsApp = async () => {
             retryRequestDelayMs: 2000 
         });
 
-        sock.ev.on('connection.update', async (update) => {
+        sock.ev.on('connection.update', async (update: any) => {
             const { connection, lastDisconnect, qr } = update;
-            
             if (qr) {
-                console.log('[Baileys] Novo QR Code recebido.');
                 qrCodeBase64 = await qrcode.toDataURL(qr);
                 connectionStatus = 'qrcode_ready';
             }
-
             if (connection === 'close') {
-                const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+                const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
                 const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-                
-                console.log(`[Baileys] Conexão fechada. Status: ${statusCode}`);
-                
                 connectionStatus = 'disconnected';
                 qrCodeBase64 = null;
 
-                // Se foi logout ou erro de permissão (403), limpa tudo para gerar novo QR
                 if (isLoggedOut || statusCode === 403) {
-                    console.log('[Baileys] Sessão inválida. Reiniciando limpo...');
                     sock = null;
                     await clearAuthFolder();
                     isReconnecting = false;
                     setTimeout(() => startWhatsApp(), 1000);
                 } else if (shouldReconnect) {
-                    console.log('[Baileys] Reconectando em 2s...');
                     isReconnecting = false; 
                     setTimeout(() => startWhatsApp(), 2000);
                 } else {
@@ -127,33 +112,27 @@ const startWhatsApp = async () => {
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
             if (type !== 'notify') return;
             for (const msg of messages) {
                 if (!msg.key.fromMe && msg.message) {
                     const remoteJid = msg.key.remoteJid;
                     const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
-                    if (text && remoteJid && !remoteJid.includes('@g.us')) { 
-                        console.log(`[Baileys] Msg de ${remoteJid}: ${text}`);
-                        
+                    if (text && remoteJid && !remoteJid.includes('@g.us') && sock) { 
                         try {
                             await sock.readMessages([msg.key]);
-                            await sock.sendPresenceUpdate('composing', remoteJid);
-                            
+                            await sock.sendPresenceUpdate('composing', remoteJid as string);
                             const humanDelay = Math.floor(Math.random() * 2000) + 1000;
                             await delay(humanDelay);
-
                             const response = await runChatAgent(text); 
-                            
-                            await sock.sendMessage(remoteJid, { text: response.text });
-                            await sock.sendPresenceUpdate('paused', remoteJid);
+                            await sock.sendMessage(remoteJid as string, { text: response.text || "Sem resposta." });
+                            await sock.sendPresenceUpdate('paused', remoteJid as string);
                         } catch (err) { console.error('[Baileys] Erro AI:', err); }
                     }
                 }
             }
         });
-
     } catch (err) {
         console.error('[Baileys] Falha crítica no start:', err);
         connectionStatus = 'error';
@@ -161,12 +140,9 @@ const startWhatsApp = async () => {
     }
 };
 
-setTimeout(startWhatsApp, 1000);
-
 // ==================================================================================
 // 1. CONFIGURAÇÃO SQL & AI HÍBRIDA
 // ==================================================================================
-
 const sqlConfig = {
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASS || 'YourStrongPass123!',
@@ -175,12 +151,10 @@ const sqlConfig = {
     options: { encrypt: false, trustServerCertificate: true }
 };
 
-// Configuração da API Key
 const apiKey = process.env.API_KEY;
-
 let aiProvider = 'unknown';
-let groqClient = null;
-let googleClient = null;
+let groqClient: Groq | null = null;
+let googleClient: GoogleGenAI | null = null;
 
 if (!apiKey) {
     console.warn('⚠️ [AI] AVISO: API_KEY não encontrada nas variáveis de ambiente. O agente de IA não funcionará.');
@@ -192,8 +166,6 @@ if (!apiKey) {
     console.log('[AI] Detectada chave GOOGLE. Usando Gemini 2.0 Flash.');
     aiProvider = 'google';
     googleClient = new GoogleGenAI({ apiKey: apiKey });
-} else {
-    console.warn('[AI] Formato de chave desconhecido. Padrão: Groq.');
 }
 
 const SYSTEM_PROMPT = `
@@ -223,7 +195,6 @@ REGRAS TÉCNICAS:
 - NUNCA gere XML ou tags como <function=...>. Use apenas a chamada de ferramenta nativa.
 `;
 
-// Tools Schema (Mantido)
 const toolsSchema = [
     { name: "get_sales_team", description: "Consulta funcionários/vendedores.", parameters: { type: "object", properties: { id: { type: "integer" }, searchName: { type: "string" } } } },
     { name: "get_customer_base", description: "Busca cadastro de clientes pelo nome.", parameters: { type: "object", properties: { searchTerm: { type: "string" } }, required: ["searchTerm"] } },
@@ -242,7 +213,7 @@ const SQL_QUERIES = {
 
 const BASE_CTE = `WITH pedidos_filtrados AS ( SELECT ibetpdd.DATEMSDOCPDD, ibetpdd.CODPDD, ibetpdd.NUMDOCPDD, ibetpdd.INDSTUMVTPDD, ibetpdd.CODCNDPGTRVD, ibetpdd.CODCET, ibetpdd.CODMTV, ibetpdd.CODORIPDD, ibetpdd.codvec, ibetpdd.CODMTCEPG FROM flexx10071188.dbo.ibetpdd WHERE DATEMSDOCPDD >= @startDate AND DATEMSDOCPDD <= @endDate AND INDSTUMVTPDD IN (1, 4) AND NUMDOCPDD <> 0 AND CODCNDPGTRVD NOT IN (9998, 9999) )`;
 
-async function executeToolCall(name, args) {
+async function executeToolCall(name: string, args: any) {
     console.log(`[ToolExecutor] Executing ${name}`, args);
     let pool;
     try {
@@ -268,21 +239,20 @@ async function executeToolCall(name, args) {
             request.input('sellerId', sql.Int, args.sellerId);
             const result = await request.query(SQL_QUERIES.VISITS_QUERY);
             const total = result.recordset.length;
-            const positivados = result.recordset.filter(r => r.status_cobertura === 'POSITIVADO').length;
+            const positivados = result.recordset.filter((r: any) => r.status_cobertura === 'POSITIVADO').length;
             const pendentes = total - positivados;
-            const listaSimples = result.recordset.filter(r => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true).slice(0, 50).map(r => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
+            const listaSimples = result.recordset.filter((r: any) => scope === 'month' ? r.status_cobertura === 'PENDENTE' : true).slice(0, 50).map((r: any) => `${r.cod_cliente} - ${r.razao_social} (${r.status_cobertura})`);
             return { ai_response: { resumo: `Rota ${date} (${scope})`, total: total, positivados: positivados, pendentes: pendentes, lista: listaSimples }, frontend_data: result.recordset };
         }
         if (name === 'analyze_client_gap') {
             request.input('customerId', sql.Int, args.customerId);
             const result = await request.query(SQL_QUERIES.OPPORTUNITY_QUERY);
-            // ALERTA: Retorno defensivo para evitar alucinação
             if (result.recordset.length === 0) {
                 return { 
                     message: "SISTEMA: Nenhuma oportunidade 'Gap' encontrada no SQL. O cliente pode não ter histórico recente. INSTRUÇÃO PARA IA: Diga ao usuário que não encontrou dados. NÃO INVENTE PRODUTOS." 
                 };
             }
-            return { oportunidades: result.recordset.map(p => p.descricao), data: result.recordset };
+            return { oportunidades: result.recordset.map((p: any) => p.descricao), data: result.recordset };
         }
         if (name === 'get_client_history') {
             request.input('customerId', sql.Int, args.customerId);
@@ -309,7 +279,6 @@ async function executeToolCall(name, args) {
             if (args.productGroup) request.input('productGroup', sql.VarChar, `%${args.productGroup}%`);
             if (args.productFamily) request.input('productFamily', sql.VarChar, `%${args.productFamily}%`);
             if (args.channel) request.input('channel', sql.VarChar, `%${args.channel}%`);
-            if (args.generalSearch) request.input('generalSearch', sql.VarChar, `%${args.generalSearch}%`);
 
             let whereConditions = [];
             let debugFilters = [];
@@ -337,7 +306,7 @@ async function executeToolCall(name, args) {
             const totalLiquido = totalResult.recordset[0]['ValorLiquido'] || 0;
             const qtdReal = totalResult.recordset[0]['QtdPedidos'] || 0;
             const coberturaReal = totalResult.recordset[0]['Cobertura'] || 0;
-            let aiPayload = { resumo: { total_liquido_periodo: totalLiquido, total_pedidos: qtdReal, cobertura_clientes_unicos: coberturaReal } };
+            let aiPayload: any = { resumo: { total_liquido_periodo: totalLiquido, total_pedidos: qtdReal, cobertura_clientes_unicos: coberturaReal } };
             const debugMeta = { period: `${args.startDate || defaultStart} a ${args.endDate || defaultEnd}`, filters: debugFilters, sqlLogic: usesLine ? 'Filtro de Linha Complexo Aplicado' : 'Filtro Padrão' };
             let frontendPayload = [];
 
@@ -359,7 +328,7 @@ async function executeToolCall(name, args) {
                 aggQuery += ` GROUP BY ${dimension} ORDER BY 'ValorLiquido' DESC`;
                 const aggResult = await request.query(aggQuery);
                 frontendPayload = aggResult.recordset;
-                if (aggResult.recordset.length > 0) { aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map(r => `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`); }
+                if (aggResult.recordset.length > 0) { aiPayload.top_grupos_lista_texto = aggResult.recordset.slice(0, 50).map((r: any) => `${r['Label']} - R$ ${r['ValorLiquido'].toFixed(2)}`); }
             } else {
                 let detailQuery = ` ${BASE_CTE} SELECT TOP 50 ibetpdd.DATEMSDOCPDD AS 'Data', CONCAT(ibetpdd.CODMTCEPG, ' - ', ibetcplepg.nomepg) AS 'Nome Vendedor', SUM(IBETITEPDD.VALTOTITEPDD) - ISNULL(SUM(ISNULL(ST.VALIPTPDD, 0)) + SUM(ISNULL(IPI.VALIPTPDD, 0)), 0) AS 'Valor Liquido' FROM pedidos_filtrados ibetpdd ${ALL_JOINS} INNER JOIN flexx10071188.dbo.ibetcplepg ibetcplepg ON ibetpdd.CODMTCEPG = ibetcplepg.CODMTCEPG `;
                 if (whereConditions.length > 0) detailQuery += ` WHERE ${whereConditions.join(' AND ')}`;
@@ -369,33 +338,26 @@ async function executeToolCall(name, args) {
             }
             return { ai_response: aiPayload, frontend_data: frontendPayload, debug_meta: debugMeta };
         }
-    } catch (sqlErr) {
+    } catch (sqlErr: any) {
         console.error("SQL Error:", sqlErr);
         return { error: `Erro SQL: ${sqlErr.message}` };
     }
 }
 
-async function runChatAgent(userMessage, history = []) {
+async function runChatAgent(userMessage: string, history: any[] = []) {
    if (!process.env.API_KEY && !apiKey) throw new Error("API Key inválida.");
-
-   // IMPLEMENTAÇÃO DE JANELA DE MEMÓRIA (Fix para Erro 429)
-   // Mantém apenas as últimas 6 interações para evitar estouro de tokens
    const MAX_HISTORY = 6;
    const recentHistory = history.slice(-MAX_HISTORY);
-
-    // Correção de Roles para API Groq/Llama
-    const contextMessages = [
+    const contextMessages: any[] = [
         { role: "system", content: SYSTEM_PROMPT },
         ...recentHistory.map(m => {
             let text = m.content;
             if (!text && m.parts && Array.isArray(m.parts) && m.parts.length > 0) {
                  text = m.parts[0].text;
             }
-            // Força conversão: 'model' virou 'assistant', 'ai' vira 'assistant', 'system' mantido
             let role = 'user';
             if (m.role === 'model' || m.role === 'ai' || m.role === 'assistant') role = 'assistant';
             if (m.role === 'system') role = 'system';
-            
             return { role: role, content: text || "" };
         }),
         { role: "user", content: userMessage }
@@ -405,8 +367,7 @@ async function runChatAgent(userMessage, history = []) {
         if (aiProvider === 'groq') { return await runGroqAgent(contextMessages); } 
         else if (aiProvider === 'google') { return await runGoogleAgent(contextMessages); } 
         else { return { text: "Erro: API Key não reconhecida. Use chave Groq (gsk_) ou Google (AIza)." }; }
-    } catch (e) { 
-        // Tratamento amigável para erro 400 do Groq (Malformed)
+    } catch (e: any) { 
         if (e.status === 400 || (e.message && e.message.includes('400'))) {
              return { text: "Desculpe, tive um erro técnico ao processar sua solicitação. Por favor, tente novamente ou reformule a pergunta." };
         }
@@ -414,106 +375,58 @@ async function runChatAgent(userMessage, history = []) {
     }
 }
 
-async function runGroqAgent(messages) {
+async function runGroqAgent(messages: any[]) {
+    if (!groqClient) return { text: "Groq não configurado." };
     const groqTools = toolsSchema.map(t => ({ type: "function", function: t }));
-    // Filtra mensagens para garantir que não haja erros de sistema
     const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
     
     let completion;
-    let message;
+    let message: any;
 
-    // TRY/CATCH ESPECÍFICO PARA ERROS DA API GROQ (Malformação do Modelo)
     try {
         completion = await groqClient.chat.completions.create({
-            messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools, tool_choice: "auto", max_tokens: 1024
+            messages: validMessages, model: "llama-3.3-70b-versatile", tools: groqTools as any, tool_choice: "auto", max_tokens: 1024
         });
         message = completion.choices[0].message;
-    } catch (apiError) {
-        // Se a API retornar 400 por causa de formato de ferramenta inválido (Llama alucinando XML)
+    } catch (apiError: any) {
         if (apiError.status === 400 && apiError.error?.failed_generation) {
             console.log("[Groq] Erro 400 detectado. Tentando recuperar tool_call do 'failed_generation'...");
-            const failedGen = apiError.error.failed_generation;
-            
-            // Simula um objeto de mensagem com o conteúdo falho para o fallback processar
-            message = {
-                content: failedGen,
-                tool_calls: null
-            };
-        } else {
-            throw apiError; // Outros erros (401, 500) sobem normal
-        }
+            message = { content: apiError.error.failed_generation, tool_calls: null };
+        } else { throw apiError; }
     }
-    
-    // --- FALLBACK ROBUSTO: DETECTAR ALUCINAÇÕES DE FUNÇÃO ---
-    // O modelo pode retornar o JSON puro ou algo como "get_scheduled_visits{...}" como TEXTO.
-    // O modelo Llama 3 adora retornar: <function=analyze_client_gap({"customerId": 123})</function>
     
     if (!message.tool_calls && message.content) {
         const content = message.content.trim();
-        
         let fnName = null;
         let fnArgs = null;
-
-        // Estratégia 1: Capturar o Nome da Função
-        // Procura "function=" seguido de letras. 
-        // Ignora se tem < antes. Pega até encontrar algo que não seja letra/numero/_
         const nameMatch = content.match(/(?:<)?function=\s*([a-zA-Z0-9_]+)/i);
-
         if (nameMatch) {
             fnName = nameMatch[1];
-            
-            // Estratégia 2: Capturar o JSON "Na Marra"
-            // Pega do PRIMEIRO '{' até o ÚLTIMO '}'
             const startJson = content.indexOf('{');
             const endJson = content.lastIndexOf('}');
-
             if (startJson > -1 && endJson > startJson) {
                 fnArgs = content.substring(startJson, endJson + 1);
-                console.log(`[Groq] Fallback Nuclear: Recuperado '${fnName}' e JSON bruto.`);
             }
         }
-
-        // Se encontrou algo via Fallback
         if (fnName && fnArgs) {
              try {
-                // Limpeza Extra: Llama 3 as vezes coloca parenteses em volta do JSON
                 let cleanArgs = fnArgs.trim();
-                if (cleanArgs.startsWith('(') && cleanArgs.endsWith(')')) {
-                    cleanArgs = cleanArgs.slice(1, -1);
-                }
-
-                // Normaliza aspas simples para duplas
-                if (cleanArgs.includes("'") && !cleanArgs.includes('"')) {
-                    cleanArgs = cleanArgs.replace(/'/g, '"');
-                }
-                
-                // Sanitização de chaves sem aspas (Ex: {customerId: 123} -> {"customerId": 123})
-                // Regex: Procura palavra seguida de : que NÃO esteja entre aspas
+                if (cleanArgs.startsWith('(') && cleanArgs.endsWith(')')) cleanArgs = cleanArgs.slice(1, -1);
+                if (cleanArgs.includes("'") && !cleanArgs.includes('"')) cleanArgs = cleanArgs.replace(/'/g, '"');
                 cleanArgs = cleanArgs.replace(/(\w+):/g, '"$1":');
-
-                // Tenta parsear
                 JSON.parse(cleanArgs);
-
-                message.tool_calls = [{
-                    id: 'call_fallback_' + Date.now(),
-                    type: 'function',
-                    function: { name: fnName, arguments: cleanArgs }
-                }];
-                message.content = null; // Remove o lixo visual
-            } catch (e) {
-                console.warn("[Groq] Falha ao parsear argumentos do Fallback:", e.message);
-                // Se falhar o parse, não quebramos, apenas deixamos seguir como texto (o modelo vai alucinar no texto, mas não cras ha a API)
-            }
+                message.tool_calls = [{ id: 'call_fallback_' + Date.now(), type: 'function', function: { name: fnName, arguments: cleanArgs } }];
+                message.content = null;
+            } catch (e) {}
         }
     }
-    // --------------------------------------------------------
 
     let dataPayload = null;
     if (message.tool_calls) {
         validMessages.push(message);
         for (const tool of message.tool_calls) {
-            const result = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
-            if (result.frontend_data) {
+            const result: any = await executeToolCall(tool.function.name, JSON.parse(tool.function.arguments));
+            if (result && result.frontend_data) {
                  dataPayload = { samples: result.frontend_data, debugMeta: result.debug_meta, totalCoverage: result.ai_response?.resumo?.cobertura_clientes_unicos };
                  validMessages.push({ tool_call_id: tool.id, role: "tool", name: tool.function.name, content: JSON.stringify(result.ai_response) });
             } else {
@@ -526,7 +439,7 @@ async function runGroqAgent(messages) {
     return { text: message.content, data: dataPayload };
 }
 
-async function runGoogleAgent(messages) {
+async function runGoogleAgent(messages: any[]) {
     if (!googleClient) return { text: "Google não configurado." };
     try {
         const contents = messages.map(m => ({
@@ -539,7 +452,7 @@ async function runGoogleAgent(messages) {
             contents: contents,
             config: {
                 systemInstruction: SYSTEM_PROMPT,
-                tools: [{ functionDeclarations: toolsSchema }]
+                tools: [{ functionDeclarations: toolsSchema }] as any
             }
         });
 
@@ -547,8 +460,8 @@ async function runGoogleAgent(messages) {
         const functionCalls = response.functionCalls;
 
         if (functionCalls && functionCalls.length > 0) {
-            const fc = functionCalls[0];
-            const toolResult = await executeToolCall(fc.name, fc.args);
+            const fc: any = functionCalls[0];
+            const toolResult: any = await executeToolCall(fc.name, fc.args);
             
             if (toolResult && toolResult.frontend_data) {
                 dataPayload = { 
@@ -558,10 +471,11 @@ async function runGoogleAgent(messages) {
                 };
             }
 
+            // Send tool response back
             contents.push({
                 role: 'model',
                 parts: [{ functionCall: { name: fc.name, args: fc.args } }]
-            });
+            } as any);
             contents.push({
                 role: 'user',
                 parts: [{ 
@@ -570,7 +484,7 @@ async function runGoogleAgent(messages) {
                         response: { result: toolResult.ai_response || toolResult } 
                     } 
                 }]
-            });
+            } as any);
 
             const finalResponse = await googleClient.models.generateContent({
                 model: "gemini-2.0-flash-exp",
@@ -584,53 +498,37 @@ async function runGoogleAgent(messages) {
         }
 
         return { text: response.text, data: dataPayload };
-    } catch (e) {
+    } catch (e: any) {
         if (e.message && e.message.includes('429')) return { text: "⚠️ Limite de cota do Google excedido. Mude para Groq para uso ilimitado." };
         throw e;
     }
 }
 
-// Rotas API
+// ==================================================================================
+// 2. ROTAS API
+// ==================================================================================
 app.get('/api/v1/health', async (req, res) => {
     try {
         const pool = await sql.connect(sqlConfig);
         await pool.request().query('SELECT 1');
-        res.json({ status: 'online', sql: 'connected', ai: aiProvider });
-    } catch (e) { res.json({ status: 'online', sql: 'error', error: e.message }); }
+        res.json({ status: 'online', sql: 'connected', ai: aiProvider, version: '1.1.1' });
+    } catch (e: any) { res.json({ status: 'online', sql: 'error', error: e.message }); }
 });
 
 app.get('/api/v1/whatsapp/status', (req, res) => { res.json({ status: connectionStatus }); });
 app.get('/api/v1/whatsapp/qrcode', (req, res) => { if (qrCodeBase64) res.json({ base64: qrCodeBase64 }); else res.status(404).json({ message: "N/A" }); });
 
 app.post('/api/v1/whatsapp/logout', async (req, res) => {
-    console.log('[API] Rota Logout chamada. Forçando desconexão...');
     try {
         shouldReconnect = false;
-        
-        if (sock) { 
-            try { sock.end(new Error('Logout manual')); } catch (e) {}
-            sock = null; 
-        }
-        
-        await new Promise(r => setTimeout(r, 1000));
-        
-        // Chama a função robusta de limpeza
+        if (sock) { try { sock.end(undefined); } catch (e) {} sock = null; }
+        await delay(1000);
         await clearAuthFolder();
-        
         connectionStatus = 'disconnected';
         isReconnecting = false; 
-        
-        setTimeout(() => { 
-            console.log('[API] Reiniciando startWhatsApp após logout...');
-            shouldReconnect = true; 
-            startWhatsApp(); 
-        }, 1500);
-
-        res.json({ message: "Resetado com sucesso. Aguarde novo QR Code." });
-    } catch (e) { 
-        console.error('[API] Erro no logout:', e);
-        res.status(500).json({ error: "Falha logout" }); 
-    }
+        setTimeout(() => { shouldReconnect = true; startWhatsApp(); }, 1500);
+        res.json({ message: "Resetado" });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/v1/chat', async (req, res) => {
@@ -644,26 +542,47 @@ app.post('/api/v1/chat', async (req, res) => {
             const isOpp = rows[0]?.['grupo'] !== undefined && rows[0]?.['descricao'] !== undefined;
             const isHist = rows[0]?.['produto'] !== undefined && rows[0]?.['total_gasto'] !== undefined;
             formattedData = {
-                totalRevenue: response.data.samples.reduce((acc, r) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
+                totalRevenue: response.data.samples.reduce((acc: number, r: any) => acc + (r['ValorLiquido'] || r['Valor Liquido'] || 0), 0),
                 totalOrders: rows.length,
                 totalCoverage: response.data.totalCoverage,
                 averageTicket: 0,
                 topProduct: rows[0]?.['Label'] || rows[0]?.['Nome Vendedor'] || 'N/A',
                 byCategory: [],
-                recentTransactions: isVisit || isOpp || isHist ? [] : rows.map((r, i) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
+                recentTransactions: isVisit || isOpp || isHist ? [] : rows.map((r: any, i: number) => ({ id: i, date: r['Data'] || new Date().toISOString(), total: r['ValorLiquido'] || r['Valor Liquido'], seller: r['Nome Vendedor'] || r['Label'] || 'Dados Agrupados' })),
                 visits: isVisit ? rows : [],
                 opportunities: isOpp ? rows : [],
                 debugMeta: response.data.debugMeta 
             };
         }
         res.json({ text: response.text, data: formattedData });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/v1/query', async (req, res) => {
-    const result = await executeToolCall('query_sales_data', req.body);
-    // Endpoint simplificado para o frontend direto
-    res.json(result.frontend_data); 
+    const result: any = await executeToolCall('query_sales_data', req.body);
+    res.json(result ? result.frontend_data : []); 
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`SalesBot V1.1.2 Hybrid (Groq/Google) running on ${PORT}`));
+// ==================================================================================
+// 3. VITE MIDDLEWARE & STARTUP
+// ==================================================================================
+async function startServer() {
+    if (process.env.NODE_ENV !== 'production') {
+        const vite = await createViteServer({
+            server: { middlewareMode: true },
+            appType: 'spa',
+        });
+        app.use(vite.middlewares);
+    } else {
+        const distPath = path.join(process.cwd(), 'dist');
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 SalesBot V1.1.2 Full-Stack running on http://localhost:${PORT}`);
+        startWhatsApp();
+    });
+}
+
+startServer();

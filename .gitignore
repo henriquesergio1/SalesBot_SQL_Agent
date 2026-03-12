@@ -37,4 +37,6 @@ dist-ssr/
 # Custom project files
 auth_info_baileys/
 migrated_prompt_history/
+!Dockerfile.txt
+!Dockerfile.api.txt
 *.txt

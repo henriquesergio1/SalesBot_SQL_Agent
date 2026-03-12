@@ -15,7 +15,7 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-const PORT = 8080;
+const PORT = 3000;
 
 // ==================================================================================
 // 0. WHATSAPP NATIVE (BAILEYS)

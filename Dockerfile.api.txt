@@ -1,0 +1,20 @@
+
+FROM node:20
+
+WORKDIR /app
+
+# Initialize package.json
+RUN npm init -y
+# Set to module to allow 'import' in .js files
+RUN npm pkg set type="module"
+# Disable SSL strictness for stability
+RUN npm config set strict-ssl false
+
+# Install dependencies: Express, MSSQL, Baileys (WhatsApp), Groq AND Google GenAI
+RUN npm install express mssql cors groq-sdk @google/genai @whiskeysockets/baileys qrcode pino --save
+
+COPY api_server.js .
+
+EXPOSE 8080
+
+CMD ["node", "api_server.js"]
